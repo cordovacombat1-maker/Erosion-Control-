@@ -1,0 +1,13 @@
+{
+  "name": "SiltLine – Erosion Control Field Log",
+  "short_name": "SiltLine",
+  "description": "Daily logs, BMP quantities, repair requests and team messages for erosion control crews.",
+  "start_url": "./index.html#/jobs",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f0e8",
+  "theme_color": "#1f3b2d",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
