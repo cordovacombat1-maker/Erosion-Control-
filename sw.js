@@ -1,8 +1,8 @@
 /* Offline cache for the app shell. Bump VERSION when files change. */
-const VERSION = 'siltline-v1';
+const VERSION = 'siltline-v2';
 const ASSETS = [
   './', './index.html', './manifest.webmanifest', './icons/icon.svg', './css/styles.css',
-  './js/db.js', './js/catalog.js', './js/ui.js', './js/pdf.js', './js/app.js',
+  './js/art.js', './js/db.js', './js/catalog.js', './js/ui.js', './js/pdf.js', './js/app.js',
   './vendor/jspdf.umd.min.js', './vendor/jspdf.plugin.autotable.min.js',
 ];
 

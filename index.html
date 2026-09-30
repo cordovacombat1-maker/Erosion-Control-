@@ -9,6 +9,9 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@600;700;800&display=swap">
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -36,12 +39,15 @@
   <nav class="tabbar" id="tabbar" aria-label="Main">
     <a href="#/jobs" data-tab="jobs">
       <svg viewBox="0 0 24 24"><path d="M3 21h18M5 21V9l7-5 7 5v12M9 21v-6h6v6"/></svg>
-      <span>Jobs</span>
+      <span>Home</span>
     </a>
     <a href="#/requests" data-tab="requests">
       <svg viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"/></svg>
       <span>Requests</span><b class="badge" id="reqBadge" hidden></b>
     </a>
+    <button class="tab-add" id="quickAdd" aria-label="Add something">
+      <span><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>
+    </button>
     <a href="#/messages" data-tab="messages">
       <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
       <span>Messages</span><b class="badge" id="msgBadge" hidden></b>
@@ -58,6 +64,7 @@
 
   <script src="vendor/jspdf.umd.min.js"></script>
   <script src="vendor/jspdf.plugin.autotable.min.js"></script>
+  <script src="js/art.js"></script>
   <script src="js/db.js"></script>
   <script src="js/catalog.js"></script>
   <script src="js/ui.js"></script>

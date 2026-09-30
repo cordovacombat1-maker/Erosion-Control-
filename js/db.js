@@ -3,7 +3,7 @@
   'use strict';
 
   const DB_NAME = 'siltline';
-  const DB_VERSION = 1;
+  const DB_VERSION = 2;
   const STORES = {
     jobs: [],
     logs: ['jobId', 'date'],
@@ -11,6 +11,7 @@
     messages: ['channel'],
     photos: ['logId', 'jobId'],
     people: [],
+    rain: ['jobId'],
     kv: null, // key-value store for settings, keyed by explicit key
   };
 
@@ -98,19 +99,21 @@
     },
 
     async deleteJob(jobId) {
-      const [logs, reqs, photos, msgs] = await Promise.all([
+      const [logs, reqs, photos, msgs, rain] = await Promise.all([
         DB.by('logs', 'jobId', jobId),
         DB.by('requests', 'jobId', jobId),
         DB.by('photos', 'jobId', jobId),
         DB.by('messages', 'channel', jobId),
+        DB.by('rain', 'jobId', jobId),
       ]);
       const db = await open();
-      const t = db.transaction(['jobs', 'logs', 'requests', 'photos', 'messages'], 'readwrite');
+      const t = db.transaction(['jobs', 'logs', 'requests', 'photos', 'messages', 'rain'], 'readwrite');
       t.objectStore('jobs').delete(jobId);
       logs.forEach((x) => t.objectStore('logs').delete(x.id));
       reqs.forEach((x) => t.objectStore('requests').delete(x.id));
       photos.forEach((x) => t.objectStore('photos').delete(x.id));
       msgs.forEach((x) => t.objectStore('messages').delete(x.id));
+      rain.forEach((x) => t.objectStore('rain').delete(x.id));
       await new Promise((res, rej) => { t.oncomplete = res; t.onerror = () => rej(t.error); });
     },
 

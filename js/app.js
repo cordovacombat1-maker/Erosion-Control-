@@ -12,6 +12,13 @@
 
   async function loadSettings() {
     S.catalog = (await DB.getKV('catalog', null)) || Catalog.DEFAULT_CATALOG.map((x) => ({ ...x }));
+    // Pick up newly added default items (stormwater, mowing…) once, without re-adding ones the user removed later.
+    if ((await DB.getKV('catalogVersion', 1)) < Catalog.CATALOG_VERSION) {
+      const have = new Set(S.catalog.map((c) => c.code));
+      Catalog.DEFAULT_CATALOG.forEach((c) => { if (!have.has(c.code)) S.catalog.push({ ...c }); });
+      await DB.setKV('catalog', S.catalog);
+      await DB.setKV('catalogVersion', Catalog.CATALOG_VERSION);
+    }
     S.company = await DB.getKV('company', '');
     S.people = (await DB.all('people')).sort((a, b) => a.name.localeCompare(b.name));
     const meId = await DB.getKV('meId', null);
@@ -129,6 +136,7 @@
       $$('#tabbar a').forEach((a) => a.classList.toggle('active', a.dataset.tab === tab));
       document.body.dataset.view = fn.name;
       app.onclick = app.oninput = app.onchange = null;
+      clearInterval(heroTimer);
       const token = ++renderToken;
       try {
         await fn(...m.slice(1), token);
@@ -191,71 +199,197 @@
     return { rows, materials: [...mats.values()], hours, days: days.size, amount };
   }
 
+  /* ---------- Stormwater helpers ---------- */
+  const addDays = (iso, n) => {
+    const d = new Date(iso + 'T12:00:00');
+    d.setDate(d.getDate() + n);
+    return d.toISOString().slice(0, 10);
+  };
+
+  function lastInspection(logs) {
+    return logs.filter((l) => l.inspection && l.inspection.enabled && (l.inspection.items || []).length)
+      .map((l) => l.date).sort().pop() || '';
+  }
+
+  /* Where a job stands on SWPPP inspections: post-rain trigger first, then the routine interval. */
+  function stormStatus(job, logs, rain) {
+    const trigger = num(job.rainTrigger) || 0.5;
+    const freq = num(job.inspectDays) || 7;
+    const last = lastInspection(logs);
+    const t = today();
+    const big = rain.filter((r) => num(r.inches) >= trigger && (!last || r.date > last))
+      .sort((a, b) => b.date.localeCompare(a.date))[0];
+    if (big) {
+      const overdue = big.date < addDays(t, -1);
+      return { state: overdue ? 'overdue' : 'rain', event: big, last, trigger, freq,
+        title: overdue ? 'Post-rain inspection overdue' : 'Post-rain inspection due',
+        detail: `${fmtNum(big.inches)}" of rain on ${fmtShort(big.date)}. Inspect within 24 hrs.` };
+    }
+    const next = addDays(last || job.start || t, freq);
+    if (next < t) return { state: 'overdue', last, next, trigger, freq, title: 'Routine inspection overdue', detail: `Was due ${fmtShort(next)}${last ? ` · last ${fmtShort(last)}` : ''}` };
+    if (next <= addDays(t, 1)) return { state: 'soon', last, next, trigger, freq, title: 'Routine inspection due', detail: `Due ${next === t ? 'today' : 'tomorrow'}${last ? ` · last ${fmtShort(last)}` : ''}` };
+    return { state: 'ok', last, next, trigger, freq, title: 'Inspections current', detail: `Next routine ${fmtShort(next)}${last ? ` · last ${fmtShort(last)}` : ''}` };
+  }
+
+  let heroTimer = null;
+
+  /* Crossfading illustrated banner. */
+  function sceneHero(inner, scenes = Art.ORDER) {
+    const start = new Date().getDate() % scenes.length;
+    return `<section class="scene-hero">
+      <div class="scene-stage">${scenes.map((s, i) => `<div class="scene ${i === start ? 'on' : ''}">${Art.scene(s)}</div>`).join('')}</div>
+      <div class="scene-shade"></div>
+      <div class="scene-overlay">${inner}</div>
+      ${scenes.length > 1 ? `<div class="scene-dots">${scenes.map((s, i) => `<button data-scene="${i}" class="${i === start ? 'on' : ''}" aria-label="Scene ${i + 1}"></button>`).join('')}</div>` : ''}
+    </section>`;
+  }
+
+  function startSceneRotation(root) {
+    clearInterval(heroTimer);
+    const scenes = $$('.scene-hero .scene', root);
+    const dots = $$('.scene-dots button', root);
+    if (scenes.length < 2) return;
+    let i = scenes.findIndex((s) => s.classList.contains('on'));
+    const show = (k) => {
+      i = (k + scenes.length) % scenes.length;
+      scenes.forEach((s, j) => s.classList.toggle('on', j === i));
+      dots.forEach((d, j) => d.classList.toggle('on', j === i));
+    };
+    dots.forEach((d) => { d.onclick = (e) => { e.stopPropagation(); show(+d.dataset.scene); startSceneRotation(root); }; });
+    heroTimer = setInterval(() => show(i + 1), 7000);
+  }
+
+  /* Fun conversions that make the month's numbers mean something on the jobsite. */
+  function funStats(logs, rain) {
+    const t = today();
+    const from = t.slice(0, 8) + '01';
+    const tot = computeTotals(logs, from, t, false);
+    const get = (...codes) => tot.rows.filter((r) => codes.includes(r.code)).reduce((a, r) => a + r.installed + r.maint, 0);
+    const lfFence = get('SF', 'SSF');
+    const lfWattle = get('WAT', 'CFS');
+    const inlets = get('IP', 'CIP', 'INLC');
+    const acres = get('MOW', 'POND_MOW');
+    const rainIn = rain.filter((r) => r.date >= from).reduce((a, r) => a + num(r.inches), 0);
+    return [
+      { k: 'fence', big: fmtNum(lfFence, 0), unit: 'LF', label: 'Silt fence', fun: `≈ ${fmtNum(lfFence / 360, 1)} football fields long` },
+      { k: 'wattle', big: fmtNum(lfWattle, 0), unit: 'LF', label: 'Wattles & socks', fun: `≈ ${fmtNum(lfWattle / 5280, 2)} miles of straw` },
+      { k: 'inlet', big: fmtNum(inlets, 0), unit: 'EA', label: 'Inlets protected', fun: inlets ? 'Storm drains say thanks' : 'Protect the drains!' },
+      { k: 'mow', big: fmtNum(acres, 1), unit: 'AC', label: 'Mowed', fun: `≈ ${fmtNum(acres / 1.32, 1)} football fields cut` },
+      { k: 'rain', big: fmtNum(rainIn, 2), unit: 'IN', label: 'Rain logged', fun: `≈ ${fmtNum(rainIn * 27154, 0)} gal of runoff per acre` },
+      { k: 'hours', big: fmtNum(tot.hours, 0), unit: 'HRS', label: 'Crew hours', fun: `≈ ${fmtNum(tot.hours / 8, 0)} crew-days in the dirt` },
+    ];
+  }
+
+  const STAT_ICON = {
+    fence: '<svg viewBox="0 0 24 24"><path d="M4 20V6M10 20V6M16 20V6M22 20V6M1 9h23M1 16h23"/></svg>',
+    wattle: '<svg viewBox="0 0 24 24"><rect x="2" y="9" width="20" height="7" rx="3.5"/><path d="M6 9l2 7M11 9l2 7M16 9l2 7"/></svg>',
+    inlet: '<svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 7v10M11 7v10M15 7v10M19 7v10"/></svg>',
+    mow: '<svg viewBox="0 0 24 24"><circle cx="7" cy="17" r="4"/><circle cx="18" cy="18" r="2.5"/><path d="M7 13V6h6l3 6h3v4M13 6v6h5"/></svg>',
+    rain: '<svg viewBox="0 0 24 24"><path d="M12 3s6 7 6 11a6 6 0 0 1-12 0c0-4 6-11 6-11z"/></svg>',
+    hours: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  };
+
   /* ======================================================================
-     JOBS
+     HOME / JOBS
      ====================================================================== */
   async function jobsView(token) {
     setHeader('SiltLine', S.company || 'Erosion Control Field Log');
-    const [jobs, logs, reqs] = await Promise.all([DB.all('jobs'), DB.all('logs'), DB.all('requests')]);
+    const [jobs, logs, reqs, rain] = await Promise.all([DB.all('jobs'), DB.all('logs'), DB.all('requests'), DB.all('rain')]);
     if (stale(token)) return;
     const filter = sessionStorage.getItem('jobFilter') || 'active';
     const lastLog = {};
     logs.forEach((l) => { if (!lastLog[l.jobId] || l.date > lastLog[l.jobId]) lastLog[l.jobId] = l.date; });
     const openReq = {};
     reqs.forEach((r) => { if (r.status !== 'done') openReq[r.jobId] = (openReq[r.jobId] || 0) + 1; });
-    const weekAgo = new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10);
-    const logsWeek = logs.filter((l) => l.date >= weekAgo).length;
     const active = jobs.filter((j) => j.status !== 'complete');
     const shown = (filter === 'all' ? jobs : filter === 'complete' ? jobs.filter((j) => j.status === 'complete') : active)
       .sort((a, b) => (lastLog[b.id] || b.createdAt).localeCompare(lastLog[a.id] || a.createdAt));
+    const t = today();
 
-    const greeting = S.me ? `Hi ${esc(S.me.name.split(' ')[0])}` : 'Welcome';
+    // Things that need the foreman's attention today.
+    const alerts = [];
+    const storm = {};
+    active.forEach((j) => {
+      const st = stormStatus(j, logs.filter((l) => l.jobId === j.id), rain.filter((r) => r.jobId === j.id));
+      storm[j.id] = st;
+      if (st.state !== 'ok') alerts.push({ kind: st.state === 'soon' ? 'soon' : 'rain', href: `#/job/${j.id}?t=storm`, title: st.title, detail: `${j.name} · ${st.detail}` });
+    });
+    const overdue = reqs.filter((r) => r.status !== 'done' && r.due && r.due < t);
+    if (overdue.length) alerts.push({ kind: 'bad', href: '#/requests', title: `${overdue.length} overdue request${overdue.length > 1 ? 's' : ''}`, detail: overdue.slice(0, 2).map((r) => r.title || r.desc).join(' · ') });
+    const drafts = logs.filter((l) => !l.submittedAt && l.date < t);
+    if (drafts.length) alerts.push({ kind: 'draft', href: `#/log/${drafts[0].id}`, title: `${drafts.length} log${drafts.length > 1 ? 's' : ''} not submitted`, detail: 'Finish up and send to the office' });
+
+    const hour = new Date().getHours();
+    const hello = hour < 12 ? 'Morning' : hour < 17 ? 'Afternoon' : 'Evening';
+    const name = S.me ? S.me.name.split(' ')[0] : 'boss';
+    const tagline = Catalog.TAGLINES[new Date().getDate() % Catalog.TAGLINES.length];
+    const todayJob = active.length === 1 ? active[0] : null;
+    const stats = funStats(logs, rain);
+
     app.innerHTML = `
-      <section class="hero">
-        <div class="hero-text">
-          <p class="eyebrow">${fmtDate(today(), { weekday: 'long', month: 'long', day: 'numeric' })}</p>
-          <h1>${greeting}</h1>
-        </div>
-        <div class="stats">
-          <div class="stat"><b>${active.length}</b><span>Active jobs</span></div>
-          <div class="stat"><b>${Object.values(openReq).reduce((a, b) => a + b, 0)}</b><span>Open requests</span></div>
-          <div class="stat"><b>${logsWeek}</b><span>Logs · 7 days</span></div>
-        </div>
-      </section>
+      ${sceneHero(`
+        <p class="eyebrow light">${fmtDate(t, { weekday: 'long', month: 'long', day: 'numeric' })}</p>
+        <h1>${hello}, ${esc(name)}</h1>
+        <p class="tagline">${esc(tagline)}</p>`)}
       ${jobs.length ? `
+      <button class="cta" data-act="start-log">
+        <span class="cta-icon">${ICON.doc}</span>
+        <span class="cta-text"><b>Start today’s log</b><small>${todayJob ? esc(todayJob.name) : active.length ? `Pick from ${active.length} active jobs` : 'No active jobs'}</small></span>
+        <span class="cta-go">›</span>
+      </button>
+      ${alerts.length ? `<div class="alerts">${alerts.map((a) => `
+        <a class="alert ${a.kind}" href="${a.href}">
+          <span class="alert-icon">${a.kind === 'rain' ? STAT_ICON.rain : a.kind === 'bad' ? ICON.flag : a.kind === 'soon' ? ICON.check : ICON.doc}</span>
+          <span class="grow"><b>${esc(a.title)}</b><small>${esc(a.detail)}</small></span><span class="go">›</span>
+        </a>`).join('')}</div>` : `<div class="all-good">${ICON.check}<span><b>All clear.</b> No inspections due, no overdue requests.</span></div>`}
+      <div class="quick-grid">
+        <button class="tile t-log" data-act="start-log"><span>${ICON.doc}</span>Daily log</button>
+        <button class="tile t-rain" data-act="rain"><span>${STAT_ICON.rain}</span>Rain gauge</button>
+        <button class="tile t-req" data-act="req"><span>${ICON.flag}</span>Request</button>
+        <a class="tile t-chat" href="#/messages"><span>${ICON.chat}</span>Crew chat</a>
+      </div>
+      <h2 class="section-title">This month in the dirt</h2>
+      <div class="fun-stats">${stats.map((s) => `
+        <div class="fun ${s.k}"><span class="fun-icon">${STAT_ICON[s.k]}</span>
+          <b>${s.big}<small>${s.unit}</small></b><span class="fun-label">${s.label}</span><span class="fun-sub">${esc(s.fun)}</span></div>`).join('')}
+      </div>
+      <h2 class="section-title">Jobs <small>${active.length} active</small></h2>
       <div class="toolbar">
         <div class="seg" role="tablist">
           ${['active', 'complete', 'all'].map((f) => `<button data-filter="${f}" class="${f === filter ? 'on' : ''}">${f[0].toUpperCase() + f.slice(1)}</button>`).join('')}
         </div>
-        <input class="search" type="search" placeholder="Search jobs" id="jobSearch" aria-label="Search jobs">
+        ${jobs.length > 3 ? '<input class="search" type="search" placeholder="Search jobs" id="jobSearch" aria-label="Search jobs">' : ''}
       </div>` : ''}
       <div class="list" id="jobList">
-        ${shown.map((j) => `
+        ${shown.map((j) => {
+          const st = storm[j.id];
+          return `
           <a class="card job-card" href="#/job/${j.id}" data-search="${esc((j.name + ' ' + (j.gc || '') + ' ' + (j.location || '') + ' ' + (j.number || '')).toLowerCase())}">
-            <div class="job-top">
-              <div>
+            <div class="job-thumb">${Art.scene(Art.forId(j.id))}</div>
+            <div class="job-body">
+              <div class="job-top">
                 <h3>${esc(j.name)}</h3>
-                <p class="meta">${j.number ? `<span>#${esc(j.number)}</span>` : ''}${j.gc ? `<span>${ICON.hard}${esc(j.gc)}</span>` : ''}</p>
+                ${openReq[j.id] ? `<span class="pill warn">${openReq[j.id]} open</span>` : j.status === 'complete' ? '<span class="pill">Complete</span>' : ''}
               </div>
-              ${openReq[j.id] ? `<span class="pill warn">${openReq[j.id]} open</span>` : j.status === 'complete' ? '<span class="pill">Complete</span>' : '<span class="pill ok">Active</span>'}
+              <p class="meta">${j.gc ? `<span>${ICON.hard}${esc(j.gc)}</span>` : ''}${j.number ? `<span>#${esc(j.number)}</span>` : ''}</p>
+              <div class="job-foot">
+                <span>${lastLog[j.id] ? 'Last log ' + fmtShort(lastLog[j.id]) : 'No logs yet'}</span>
+                ${st && st.state !== 'ok' ? `<span class="storm-dot ${st.state}">${STAT_ICON.rain}${st.state === 'soon' ? 'Inspect soon' : 'Inspect'}</span>` : st ? `<span class="storm-dot ok">${ICON.check}SWPPP ok</span>` : ''}
+              </div>
             </div>
-            ${j.location ? `<p class="meta loc">${ICON.pin}${esc(j.location)}</p>` : ''}
-            <div class="job-foot">
-              <span>${lastLog[j.id] ? 'Last log ' + fmtShort(lastLog[j.id]) : 'No logs yet'}</span>
-              <span class="go">›</span>
-            </div>
-          </a>`).join('')}
+          </a>`;
+        }).join('')}
       </div>
       ${!jobs.length ? `
         <div class="empty">
-          <div class="empty-art">${emptyArt()}</div>
-          <h3>No jobs yet</h3>
-          <p class="muted">Create your first job to start logging daily erosion control work.</p>
+          <h3>Let’s get your first job on the board</h3>
+          <p class="muted">Add a project, then log crews, silt fence, inlet protection, mowing, rain events and photos every day.</p>
           <button class="btn primary" data-act="new-job">${ICON.plus} New job</button>
           <button class="btn ghost" data-act="demo">Load a sample job</button>
         </div>` : shown.length ? '' : '<p class="muted center pad">No jobs in this view.</p>'}
-      <button class="fab" data-act="new-job" aria-label="New job">${ICON.plus}<span>New job</span></button>`;
+      ${jobs.length ? `<button class="btn soft block add-job" data-act="new-job">${ICON.plus} New job</button>` : ''}`;
 
+    startSceneRotation(app);
     app.onclick = async (e) => {
       const f = e.target.closest('[data-filter]');
       if (f) { sessionStorage.setItem('jobFilter', f.dataset.filter); route(); return; }
@@ -263,6 +397,9 @@
       if (!a) return;
       if (a.dataset.act === 'new-job') jobForm();
       if (a.dataset.act === 'demo') { await loadDemo(); route(); }
+      if (a.dataset.act === 'start-log') pickJob('Start today’s log', (j) => openTodayLog(j));
+      if (a.dataset.act === 'rain') pickJob('Log rain for…', (j) => rainForm(j));
+      if (a.dataset.act === 'req') requestForm({});
     };
     const search = $('#jobSearch');
     if (search) search.oninput = () => {
@@ -271,15 +408,128 @@
     };
   }
 
-  function emptyArt() {
-    return `<svg viewBox="0 0 200 90" aria-hidden="true">
-      <path d="M0 70 C40 55 60 80 100 66 S160 52 200 64 V90 H0z" fill="var(--soil)" opacity=".35"/>
-      <path d="M0 78 C50 66 80 88 120 76 S170 68 200 74 V90 H0z" fill="var(--soil)" opacity=".55"/>
-      <g stroke="var(--ink)" stroke-width="3" stroke-linecap="round"><path d="M40 70V38M80 68V36M120 66V34M160 64V32"/></g>
-      <path d="M40 44 L80 42 L120 40 L160 38 L160 62 L120 64 L80 66 L40 68z" fill="var(--ink)" opacity=".75"/>
-      <g fill="var(--grass)"><path d="M18 72l3-12 3 12zM26 72l2-9 2 9zM176 66l3-12 3 12zM186 66l2-8 2 8z"/></g>
-      <ellipse cx="100" cy="78" rx="30" ry="5" fill="var(--straw)" opacity=".85"/>
-    </svg>`;
+  /* Ask which job, skipping the question when only one is active. */
+  async function pickJob(title, cb) {
+    const jobs = (await DB.all('jobs')).filter((j) => j.status !== 'complete').sort((a, b) => a.name.localeCompare(b.name));
+    if (!jobs.length) { toast('Create a job first'); jobForm(); return; }
+    if (jobs.length === 1) { cb(jobs[0]); return; }
+    sheet(title, `<div class="pick-list">${jobs.map((j) => `
+      <button class="pick" data-jid="${j.id}"><span class="pick-thumb">${Art.scene(Art.forId(j.id))}</span>
+        <span class="grow"><b>${esc(j.name)}</b><small>${esc(j.gc || j.location || '')}</small></span></button>`).join('')}</div>`,
+    (s, close) => {
+      s.querySelectorAll('[data-jid]').forEach((b) => {
+        b.onclick = () => { close(); setTimeout(() => cb(jobs.find((j) => j.id === b.dataset.jid)), 220); };
+      });
+    });
+  }
+
+  async function openTodayLog(job, opts) {
+    const logs = await DB.by('logs', 'jobId', job.id);
+    const existing = logs.find((l) => l.date === today());
+    if (existing) {
+      if (opts && opts.inspection && !(existing.inspection && existing.inspection.enabled)) {
+        existing.inspection = await inspectionPreset(job);
+        await DB.put('logs', existing);
+      }
+      location.hash = '#/log/' + existing.id;
+    } else {
+      newLog(job, opts, true);
+    }
+  }
+
+  async function inspectionPreset(job) {
+    const [logs, rain] = await Promise.all([DB.by('logs', 'jobId', job.id), DB.by('rain', 'jobId', job.id)]);
+    const st = stormStatus(job, logs, rain);
+    return { enabled: true, type: st.event ? 'Post-rain event' : 'Weekly', rain: st.event ? String(st.event.inches) : '', items: [] };
+  }
+
+  /* Center "+" button: everything a foreman adds, one tap away. */
+  function quickAdd() {
+    sheet('What are we logging?', `
+      <div class="qa-grid">
+        <button class="qa t-log" data-q="log"><span>${ICON.doc}</span><b>Daily log</b><small>Crew, BMPs, photos</small></button>
+        <button class="qa t-rain" data-q="rain"><span>${STAT_ICON.rain}</span><b>Rain event</b><small>Rain gauge reading</small></button>
+        <button class="qa t-insp" data-q="insp"><span>${ICON.check}</span><b>Inspection</b><small>BMP checklist</small></button>
+        <button class="qa t-req" data-q="req"><span>${ICON.flag}</span><b>Request</b><small>From GC / inspector</small></button>
+        <button class="qa t-chat" data-q="chat"><span>${ICON.chat}</span><b>Message</b><small>Team chat</small></button>
+        <button class="qa t-job" data-q="job"><span>${ICON.hard}</span><b>New job</b><small>Start a project</small></button>
+      </div>`, (s, close) => {
+      s.querySelector('.qa-grid').onclick = (e) => {
+        const b = e.target.closest('[data-q]');
+        if (!b) return;
+        close();
+        const q = b.dataset.q;
+        setTimeout(() => {
+          if (q === 'log') pickJob('Start today’s log', (j) => openTodayLog(j));
+          if (q === 'rain') pickJob('Log rain for…', (j) => rainForm(j));
+          if (q === 'insp') pickJob('Inspect which job?', (j) => openTodayLog(j, { inspection: true }));
+          if (q === 'req') requestForm({});
+          if (q === 'chat') location.hash = '#/messages';
+          if (q === 'job') jobForm();
+        }, 220);
+      };
+    });
+  }
+
+  function rainForm(job, after) {
+    sheet(`Rain gauge · ${job.name}`, `
+      <form class="form" id="rainForm">
+        <div class="gauge">
+          <div class="gauge-tube"><div class="gauge-fill" id="gaugeFill"></div></div>
+          <div class="grow">
+            <label>Rainfall (inches)<input name="inches" id="rainIn" type="number" step="0.01" min="0" inputmode="decimal" required placeholder="0.00" class="big-num"></label>
+            <div class="chips-row">${['0.25', '0.5', '1', '1.5', '2'].map((v) => `<button type="button" class="chip-btn" data-v="${v}">${v}"</button>`).join('')}</div>
+          </div>
+        </div>
+        <div class="grid2">
+          <label>Date<input type="date" name="date" value="${today()}"></label>
+          <label>Source<select name="source"><option>Site rain gauge</option><option>Weather service</option><option>Estimate</option></select></label>
+        </div>
+        <label>Notes<input name="note" placeholder="e.g. Heavy runoff at north basin"></label>
+        <p class="hint" id="rainHint">Events of ${fmtNum(num(job.rainTrigger) || 0.5)}" or more trigger a post-rain inspection.</p>
+        <button class="btn primary block" type="submit">${STAT_ICON.rain} Save rain event</button>
+      </form>`, (s, close) => {
+      const inp = s.querySelector('#rainIn');
+      const fill = s.querySelector('#gaugeFill');
+      const trig = num(job.rainTrigger) || 0.5;
+      const upd = () => {
+        const v = num(inp.value);
+        fill.style.height = Math.min(100, (v / 3) * 100) + '%';
+        fill.classList.toggle('over', v >= trig);
+      };
+      inp.oninput = upd;
+      s.querySelectorAll('[data-v]').forEach((b) => { b.onclick = () => { inp.value = b.dataset.v; upd(); }; });
+      s.querySelector('#rainForm').onsubmit = async (e) => {
+        e.preventDefault();
+        const d = Object.fromEntries(new FormData(e.target));
+        const r = await DB.put('rain', { jobId: job.id, date: d.date, inches: num(d.inches), source: d.source, note: d.note, by: S.me && S.me.name });
+        await systemMessage(job.id, r.inches >= trig
+          ? `logged ${fmtNum(r.inches)}" of rain on ${fmtShort(r.date)} — post-rain BMP inspection due within 24 hrs`
+          : `logged ${fmtNum(r.inches)}" of rain on ${fmtShort(r.date)}`);
+        close(); notify();
+        toast(r.inches >= trig ? 'Rain logged — inspection due!' : 'Rain logged');
+        after ? after() : route();
+      };
+    });
+  }
+
+  function confetti() {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const box = document.createElement('div');
+    box.className = 'confetti';
+    const colors = ['#e0a43a', '#5c8d3b', '#e0662a', '#1c1c1c', '#3a7ca5', '#a8763f'];
+    for (let i = 0; i < 46; i++) {
+      const p = document.createElement('i');
+      p.style.left = Math.random() * 100 + 'vw';
+      p.style.background = colors[i % colors.length];
+      p.style.animationDelay = Math.random() * 0.4 + 's';
+      p.style.animationDuration = 1.4 + Math.random() * 1.2 + 's';
+      p.style.setProperty('--r', (Math.random() * 720 - 360) + 'deg');
+      p.style.setProperty('--x', (Math.random() * 120 - 60) + 'px');
+      box.appendChild(p);
+    }
+    document.body.appendChild(box);
+    setTimeout(() => box.remove(), 3200);
   }
 
   function jobForm(job) {
@@ -327,15 +577,17 @@
     tab = tab || 'logs';
     const job = await DB.get('jobs', id);
     if (!job) return notFound('Job');
-    const [logs, reqs, msgs] = await Promise.all([DB.by('logs', 'jobId', id), DB.by('requests', 'jobId', id), DB.by('messages', 'channel', id)]);
+    const [logs, reqs, msgs, rain] = await Promise.all([DB.by('logs', 'jobId', id), DB.by('requests', 'jobId', id), DB.by('messages', 'channel', id), DB.by('rain', 'jobId', id)]);
     if (stale(token)) return;
     setHeader(job.name, job.gc || job.location || '', '#/jobs');
     logs.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
     const openCount = reqs.filter((r) => r.status !== 'done').length;
     const unread = (await unreadCounts(msgs))[id] || 0;
+    const st = stormStatus(job, logs, rain);
 
     const tabs = [
       ['logs', 'Daily logs', logs.length],
+      ['storm', 'Stormwater', st.state === 'ok' ? 0 : '!'],
       ['qty', 'Quantities'],
       ['requests', 'Requests', openCount],
       ['chat', 'Chat', unread],
@@ -344,41 +596,175 @@
 
     app.innerHTML = `
       <section class="job-hero">
-        <div class="job-hero-meta">
-          ${job.number ? `<span class="tag">#${esc(job.number)}</span>` : ''}
-          ${job.status === 'complete' ? '<span class="tag">Complete</span>' : '<span class="tag live">Active</span>'}
-        </div>
-        <h1>${esc(job.name)}</h1>
-        ${job.gc ? `<p class="meta">${ICON.hard}${esc(job.gc)}${job.gcContact ? ' · ' + esc(job.gcContact) : ''}</p>` : ''}
-        ${job.location ? `<a class="meta loc" target="_blank" rel="noopener" href="https://maps.google.com/?q=${encodeURIComponent(job.location)}">${ICON.pin}${esc(job.location)}</a>` : ''}
-        <div class="quick">
-          <button class="btn primary" data-act="new-log">${ICON.doc} New daily log</button>
-          <button class="btn soft" data-act="new-req">${ICON.flag} Request</button>
+        <div class="job-art">${Art.scene(Art.forId(job.id))}</div>
+        <div class="job-hero-body">
+          <div class="job-hero-meta">
+            ${job.number ? `<span class="tag">#${esc(job.number)}</span>` : ''}
+            ${job.status === 'complete' ? '<span class="tag">Complete</span>' : '<span class="tag live">Active</span>'}
+            <a class="tag storm-tag ${st.state}" href="#/job/${id}?t=storm">${STAT_ICON.rain}${st.state === 'ok' ? 'SWPPP current' : st.state === 'soon' ? 'Inspection soon' : 'Inspection due'}</a>
+          </div>
+          <h1>${esc(job.name)}</h1>
+          ${job.gc ? `<p class="meta">${ICON.hard}${esc(job.gc)}${job.gcContact ? ' · ' + esc(job.gcContact) : ''}</p>` : ''}
+          ${job.location ? `<a class="meta loc" target="_blank" rel="noopener" href="https://maps.google.com/?q=${encodeURIComponent(job.location)}">${ICON.pin}${esc(job.location)}</a>` : ''}
+          <div class="quick">
+            <button class="btn primary" data-act="new-log">${ICON.doc} Daily log</button>
+            <button class="btn soft" data-act="rain">${STAT_ICON.rain} Rain</button>
+            <button class="btn soft" data-act="new-req">${ICON.flag} Request</button>
+          </div>
         </div>
       </section>
       <nav class="tabs" role="tablist">
-        ${tabs.map(([k, label, n]) => `<a href="#/job/${id}?t=${k}" class="${k === tab ? 'on' : ''}" role="tab">${label}${n ? `<b>${n}</b>` : ''}</a>`).join('')}
+        ${tabs.map(([k, label, n]) => `<a href="#/job/${id}?t=${k}" class="${k === tab ? 'on' : ''} ${k === 'storm' && n ? 'alert-tab' : ''}" role="tab">${label}${n ? `<b>${n}</b>` : ''}</a>`).join('')}
       </nav>
       <div id="tabBody"></div>`;
 
     app.onclick = async (e) => {
       const a = e.target.closest('[data-act]');
       if (!a) return;
-      if (a.dataset.act === 'new-log') newLog(job);
+      if (a.dataset.act === 'new-log') openTodayLog(job);
+      if (a.dataset.act === 'rain') rainForm(job);
       if (a.dataset.act === 'new-req') requestForm({ jobId: id });
     };
 
     const body = $('#tabBody');
     if (tab === 'logs') renderLogsTab(body, job, logs);
+    if (tab === 'storm') renderStormTab(body, job, logs, rain, st);
     if (tab === 'qty') renderQtyTab(body, job, logs);
     if (tab === 'requests') renderRequestList(body, reqs, { jobs: { [id]: job }, showJob: false, emptyText: 'No repair requests logged for this job.' });
     if (tab === 'chat') { location.replace('#/chat/' + id); }
     if (tab === 'info') renderInfoTab(body, job, logs);
   }
 
+  /* 30-day rain gauge: one series, bars from the baseline, dashed line at the inspection trigger. */
+  function rainChart(rain, trigger) {
+    const t = today();
+    const days = Array.from({ length: 30 }, (_, i) => addDays(t, i - 29));
+    const byDay = {};
+    rain.forEach((r) => { byDay[r.date] = (byDay[r.date] || 0) + num(r.inches); });
+    const max = Math.max(trigger * 2, ...days.map((d) => byDay[d] || 0));
+    const W = 320, H = 120, L = 26, B = 100, top = 10;
+    const bw = (W - L - 4) / 30;
+    const y = (v) => B - (v / max) * (B - top);
+    const ty = y(trigger);
+    const bars = days.map((d, i) => {
+      const v = byDay[d] || 0;
+      const x = L + i * bw;
+      const h = B - y(v);
+      const tip = `${fmtShort(d)}: ${v ? fmtNum(v) + '"' : 'no rain'}`;
+      return `<g class="rbar" data-tip="${esc(tip)}">
+        <rect class="hit" x="${x}" y="${top}" width="${bw}" height="${B - top}" fill="transparent"/>
+        ${v ? `<path d="M${x + 1.5} ${B} V${B - h + Math.min(3, h)} q0 -3 3 -3 h${bw - 6} q3 0 3 3 V${B}z" class="${v >= trigger ? 'hot' : ''}"/>` : ''}
+      </g>`;
+    }).join('');
+    return `<div class="chart-wrap">
+      <svg class="rain-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily rainfall, last 30 days">
+        <path d="M${L} ${B}H${W - 2}" class="axis"/>
+        <text x="${L - 4}" y="${top + 4}" text-anchor="end" class="tick">${fmtNum(max, 1)}"</text>
+        <text x="${L - 4}" y="${B}" text-anchor="end" class="tick">0</text>
+        ${bars}
+        <path d="M${L} ${ty}H${W - 2}" class="trigger"/>
+        <text x="${L + 4}" y="${ty - 4}" class="tick trig-label">${fmtNum(trigger)}" trigger</text>
+        <text x="${L}" y="${H - 4}" class="tick">${fmtShort(days[0])}</text>
+        <text x="${W - 2}" y="${H - 4}" text-anchor="end" class="tick">Today</text>
+      </svg>
+      <div class="chart-tip" hidden></div>
+    </div>`;
+  }
+
+  function renderStormTab(body, job, logs, rain, st) {
+    rain.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+    const t = today();
+    const month = rain.filter((r) => r.date >= addDays(t, -29));
+    const total = month.reduce((a, r) => a + num(r.inches), 0);
+    const biggest = month.reduce((m, r) => (num(r.inches) > num(m && m.inches) ? r : m), null);
+    const inspections = logs.filter((l) => l.inspection && l.inspection.enabled && (l.inspection.items || []).length);
+    const tot = computeTotals(logs, '', '', false);
+    const swRows = tot.rows.filter((r) => { const d = bmpDef(r.code); return d && Catalog.STORMWATER_CATS.includes(d.cat); });
+    const count = (l, c) => l.inspection.items.filter((i) => i.cond === c).length;
+
+    body.innerHTML = `
+      <div class="storm-status ${st.state}">
+        <div class="storm-art">${Art.stormwater()}</div>
+        <div class="storm-text">
+          <b>${esc(st.title)}</b>
+          <span>${esc(st.detail)}</span>
+          <button class="btn ${st.state === 'ok' ? 'soft' : 'primary'} small" data-s="inspect">${ICON.check} ${st.state === 'ok' ? 'Start an inspection' : 'Inspect now'}</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>${STAT_ICON.rain}Rain gauge · 30 days</h3><button class="btn small primary" data-s="rain">${ICON.plus} Log rain</button></div>
+        <div class="rain-kpis">
+          <div><b>${fmtNum(total, 2)}"</b><span>Total</span></div>
+          <div><b>${biggest ? fmtNum(biggest.inches) + '"' : '—'}</b><span>Biggest${biggest ? ' · ' + fmtShort(biggest.date) : ''}</span></div>
+          <div><b>${month.filter((r) => num(r.inches) >= st.trigger).length}</b><span>Trigger events</span></div>
+        </div>
+        ${rainChart(rain, st.trigger)}
+        ${rain.length ? `<ul class="rain-list">${rain.slice(0, 12).map((r) => `
+          <li><span class="drop ${num(r.inches) >= st.trigger ? 'hot' : ''}">${STAT_ICON.rain}</span>
+            <span class="grow"><b>${fmtNum(r.inches)}"</b> · ${fmtDate(r.date, { weekday: 'short', month: 'short', day: 'numeric' })}<small>${esc([r.source, r.note, r.by].filter(Boolean).join(' · '))}</small></span>
+            <button class="icon-btn del" data-s="del-rain" data-id="${r.id}" aria-label="Delete">${ICON.x}</button></li>`).join('')}</ul>`
+        : '<p class="muted pad small-text">No rain logged yet. Check the gauge after every storm.</p>'}
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>${ICON.check}Inspections</h3><span class="count">${inspections.length}</span></div>
+        ${inspections.length ? `<div class="insp-list">${inspections.slice(0, 8).map((l) => `
+          <a href="#/log/${l.id}" class="insp-row">
+            <span class="date-block sm"><b>${new Date(l.date + 'T12:00').getDate()}</b><span>${fmtDate(l.date, { month: 'short' })}</span></span>
+            <span class="grow"><b>${esc(l.inspection.type || 'Routine')}</b>${l.inspection.rain ? ` · ${esc(l.inspection.rain)}"` : ''}
+              <small class="cond-counts"><i class="c-good">${count(l, 'good')} good</i><i class="c-maint">${count(l, 'maint')} maint</i><i class="c-failed">${count(l, 'failed')} failed</i></small></span>
+            <span class="go">›</span></a>`).join('')}</div>`
+        : '<p class="muted pad small-text">No inspections recorded yet.</p>'}
+        <div class="storm-settings">
+          <label class="mini">Rain trigger (in)<input type="number" step="0.05" min="0" inputmode="decimal" data-js="rainTrigger" value="${st.trigger}"></label>
+          <label class="mini">Routine every (days)<input type="number" step="1" min="1" inputmode="numeric" data-js="inspectDays" value="${st.freq}"></label>
+        </div>
+        <p class="hint pad-x">Set these to match your permit (many require inspection every 7 days and within 24 hrs of ½" rain).</p>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>${ICON.ruler}Stormwater BMPs on site</h3></div>
+        ${swRows.length ? `<ul class="kv">${swRows.map((r) => `<li><span>${esc(r.name)}</span><b>${fmtNum(r.installed)} ${esc(r.unit)}${r.maint ? ` <small class="muted">· ${fmtNum(r.maint)} maint</small>` : ''}</b></li>`).join('')}</ul>`
+        : '<p class="muted pad small-text">Inlet protection, check dams, skimmers, outlet protection and other stormwater items you install will be tallied here.</p>'}
+      </div>`;
+
+    const tip = $('.chart-tip', body);
+    $$('.rbar', body).forEach((g) => {
+      const show = () => {
+        tip.hidden = false;
+        tip.textContent = g.dataset.tip;
+        const box = g.getBoundingClientRect(), wrap = g.closest('.chart-wrap').getBoundingClientRect();
+        tip.style.left = Math.min(Math.max(box.left - wrap.left + box.width / 2, 40), wrap.width - 40) + 'px';
+      };
+      g.addEventListener('pointerenter', show);
+      g.addEventListener('click', show);
+      g.addEventListener('pointerleave', () => { tip.hidden = true; });
+    });
+
+    body.onchange = async (e) => {
+      const k = e.target.dataset.js;
+      if (!k) return;
+      job[k] = num(e.target.value);
+      await DB.put('jobs', job);
+      toast('Saved');
+      route();
+    };
+    body.onclick = async (e) => {
+      const b = e.target.closest('[data-s]');
+      if (!b) return;
+      if (b.dataset.s === 'rain') rainForm(job);
+      if (b.dataset.s === 'inspect') openTodayLog(job, { inspection: true });
+      if (b.dataset.s === 'del-rain' && await confirmSheet('Delete rain event?', 'Remove this rain gauge reading?')) {
+        await DB.del('rain', b.dataset.id);
+        notify(); route();
+      }
+    };
+  }
+
   function renderLogsTab(body, job, logs) {
     if (!logs.length) {
-      body.innerHTML = `<div class="empty small"><h3>No daily logs</h3><p class="muted">Tap “New daily log” to record today’s crew, BMPs and photos.</p></div>`;
+      body.innerHTML = `<div class="empty small"><div class="empty-scene">${Art.slope()}</div><h3>No daily logs</h3><p class="muted">Tap “New daily log” to record today’s crew, BMPs and photos.</p></div>`;
       return;
     }
     body.innerHTML = `<div class="list">${logs.map((l) => {
@@ -522,11 +908,11 @@
   /* ======================================================================
      DAILY LOG
      ====================================================================== */
-  async function newLog(job) {
+  async function newLog(job, opts = {}, skipCheck = false) {
     const logs = await DB.by('logs', 'jobId', job.id);
     const t = today();
     const existing = logs.find((l) => l.date === t);
-    if (existing && !(await confirmSheet('Log already exists', 'There is already a daily log for today on this job. Start another one anyway?', 'Create another', false))) {
+    if (existing && !skipCheck && !(await confirmSheet('Log already exists', 'There is already a daily log for today on this job. Start another one anyway?', 'Create another', false))) {
       location.hash = '#/log/' + existing.id;
       return;
     }
@@ -535,7 +921,7 @@
       weather: '', temp: '', start: '07:00', end: '15:30',
       crew: S.me ? [{ name: S.me.name, hours: '' }] : [],
       bmps: [], maint: [], materials: [], notes: '', photoCount: 0,
-      inspection: { enabled: false, type: 'Routine', rain: '', items: [] },
+      inspection: opts.inspection ? await inspectionPreset(job) : { enabled: false, type: 'Routine', rain: '', items: [] },
     });
     location.hash = '#/log/' + log.id;
   }
@@ -551,6 +937,7 @@
     log.crew = log.crew || []; log.bmps = log.bmps || []; log.maint = log.maint || []; log.materials = log.materials || [];
     log.inspection = log.inspection || { enabled: false, type: 'Routine', rain: '', items: [] };
     photos.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    if (log.inspection.enabled && !log.inspection.items.length) log.inspection.items = onSiteItems();
 
     let saveTimer = null;
     const status = () => $('#saveState');
@@ -880,7 +1267,8 @@
         const summary = log.bmps.filter((x) => num(x.qty)).map((x) => `${fmtNum(x.qty)} ${x.unit} ${shortName(x)}`).join(', ');
         await systemMessage(job.id, `${first ? 'submitted' : 'updated'} the daily log for ${fmtDate(log.date)} — ${log.crew.length} crew, ${fmtNum(hrs, 1)} hrs${summary ? '. Installed: ' + summary : ''}${photos.length ? `. ${photos.length} photo(s)` : ''}.`);
         notify();
-        toast('Submitted — the team can see it in chat');
+        confetti();
+        toast(first ? 'Log submitted. Nice work out there!' : 'Log resubmitted');
         route();
       } else if (act === 'delete') {
         if (await confirmSheet('Delete daily log?', `Remove the ${fmtDate(log.date)} log and its ${photos.length} photo(s)?`)) {
@@ -1384,7 +1772,7 @@
   /* Pick who is using this device – no passwords, just attribution for logs and chat. */
   function profileSheet(firstRun) {
     sheet(firstRun ? 'Welcome to SiltLine' : 'Who’s using this device?', `
-      ${firstRun ? `<p class="muted">Daily logs, BMP quantities, repair requests and team chat for erosion control crews. Everything is saved on this device — no sign-up.</p>` : ''}
+      ${firstRun ? `<div class="welcome-art">${Art.tractor()}</div><p class="muted">Daily logs, BMP quantities, stormwater inspections, rain events and team chat for erosion control crews. Everything is saved on this device — no sign-up.</p>` : ''}
       ${S.people.length ? `<div class="pick-list">${S.people.map((p) => `
         <button class="pick ${S.me && S.me.id === p.id ? 'on' : ''}" data-pid="${p.id}"><span class="avatar ${roleClass(p.role)}">${esc(initials(p.name))}</span>
         <span class="grow"><b>${esc(p.name)}</b><small>${esc(p.role)}</small></span>${S.me && S.me.id === p.id ? ICON.check : ''}</button>`).join('')}</div>
@@ -1431,7 +1819,7 @@
       if (!S.people.some((p) => p.name === name)) await DB.put('people', { name, role });
     }
     const set = (code, rate) => { const c = bmpDef(code); if (c && !c.rate) c.rate = rate; };
-    set('SF', 2.85); set('WAT', 3.5); set('IP', 145); set('RCE', 2400); set('CD', 325); set('ECB', 2.1);
+    set('SF', 2.85); set('WAT', 3.5); set('IP', 145); set('RCE', 2400); set('CD', 325); set('ECB', 2.1); set('MOW', 85); set('SKIM', 1250);
     await DB.setKV('catalog', S.catalog);
     const job = await DB.put('jobs', { name: 'Oak Ridge Subdivision – Ph. 2', number: '24-118', gc: 'Summit Builders', gcContact: 'Rick Dawson', gcPhone: '555-201-4410', location: '4200 Oak Ridge Rd, Franklin, TN', permit: 'TNR-204417', start: d(6), status: 'active', notes: 'Perimeter SF, inlet protection on all curb inlets, 2 construction entrances, wattles on slopes > 3:1.' });
     const mk = (days, extra) => DB.put('logs', {
@@ -1442,9 +1830,14 @@
     await mk(5, { bmps: [{ code: 'SF', name: 'Silt Fence', unit: 'LF', qty: '1250', where: 'North & east property line' }, { code: 'RCE', name: 'Rock Construction Entrance', unit: 'EA', qty: '1', where: 'Oak Ridge Rd entrance' }],
       materials: [{ item: 'Silt fence fabric', qty: '13', unit: 'ROLL' }, { item: '2" rock', qty: '42', unit: 'TON' }], notes: 'Mobilized. GC wants entrance #2 once phase 2 road is cut.' });
     await mk(4, { weather: 'Partly cloudy', bmps: [{ code: 'SF', name: 'Silt Fence', unit: 'LF', qty: '980', where: 'South line' }, { code: 'IP', name: 'Inlet Protection', unit: 'EA', qty: '6', where: 'Inlets 1–6' }] });
+    await mk(3, { weather: 'Clear', bmps: [{ code: 'MOW', name: 'Mowing / Bush Hogging', unit: 'AC', qty: '6.5', where: 'Phase 1 common area & pond banks' }, { code: 'SKIM', name: 'Basin Skimmer', unit: 'EA', qty: '1', where: 'Sediment basin #1' }, { code: 'CD', name: 'Rock Check Dam', unit: 'EA', qty: '3', where: 'East ditch' }],
+      notes: 'Bush hogged phase 1 before the rain. Skimmer set on basin #1.' });
     await mk(2, { weather: 'Heavy rain', temp: '64', bmps: [{ code: 'WAT', name: 'Straw Wattles', unit: 'LF', qty: '400', where: 'Slope behind lots 20–26' }],
       maint: [{ code: 'SF', kind: 'Repair', qty: '60', unit: 'LF', desc: 'Re-trenched and re-staked SF undermined at SE corner' }],
       inspection: { enabled: true, type: 'Post-rain event', rain: '1.35', items: [{ name: 'Silt Fence', cond: 'maint', note: 'Sediment at 1/3 height along south line' }, { name: 'Inlet Protection', cond: 'good', note: '' }, { name: 'Rock Construction Entrance', cond: 'good', note: '' }] } });
+    await DB.put('rain', { jobId: job.id, date: d(2), inches: 1.35, source: 'Site rain gauge', note: 'Runoff over south SF', by: me });
+    await DB.put('rain', { jobId: job.id, date: d(9), inches: 0.3, source: 'Site rain gauge', by: me });
+    await DB.put('rain', { jobId: job.id, date: d(0), inches: 0.8, source: 'Weather service', note: 'Overnight storm', by: me });
     const open = await DB.put('requests', { jobId: job.id, source: 'Inspector', requestedBy: 'County – J. Price', title: 'Clean out sediment behind south silt fence', desc: 'Sediment above 1/3 fence height from STA 3+00 to 6+50.', location: 'South line', date: d(1), due: d(-2), priority: 'High', status: 'open' });
     await DB.put('requests', { jobId: job.id, source: 'GC', requestedBy: 'Rick Dawson', title: 'Add inlet protection on new curb inlet at Lot 9', location: 'Lot 9', date: d(0), priority: 'Normal', status: 'open' });
     await systemMessage(job.id, `created job "${job.name}"`);
@@ -1468,6 +1861,7 @@
     await loadSettings();
     renderUserChip();
     $('#userChip').onclick = () => profileSheet();
+    $('#quickAdd').onclick = () => quickAdd();
     window.addEventListener('hashchange', route);
     if (bus) bus.onmessage = () => {
       loadSettings().then(() => { refreshBadges(); if (document.body.dataset.view === 'chatView' || document.body.dataset.view === 'messagesView') route(); });
