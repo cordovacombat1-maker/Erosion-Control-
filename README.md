@@ -15,6 +15,16 @@ A mobile-first web app for erosion control contractors. Foremen log each day's w
   - automatic post-rain inspection trigger (default 0.5") and routine inspection interval (default 7 days), both adjustable to match your permit
   - inspection history with good / maintenance / failed counts
   - tally of stormwater BMPs on site (inlets, check dams, skimmers, outlet protection…)
+- **Voice entry ("Talk it in")**: tap the mic in a daily log and talk through the day.
+  - The app fills in crew names and hours, linear feet or counts for each BMP (with locations), repairs vs. installs, mowing acres, materials, weather, temperature, rain, and start/quit times.
+  - Everything shows up on a review screen before it's added, and the full transcript goes into the notes.
+  - It uses the browser's built-in speech recognition (Chrome, Edge, Safari on iOS/macOS), so there's no paid service. Where speech isn't supported, you can dictate with the phone keyboard's mic or type.
+- **DVIRs (pre-trip / post-trip)**: driver vehicle inspection reports following FMCSA §396.11/§396.13.
+  - Separate checklists for trucks, trailers and equipment, with OK/Defect per item and defect descriptions.
+  - Review of the unit's last report, and a finger-drawn driver signature.
+  - Mechanic/supervisor sign-off (corrected, or need not be corrected).
+  - Defects post an urgent message to the whole team and show as alerts on the home screen; a reminder appears if a pre-trip hasn't been done today.
+  - PDF export for every report.
 - **Mowing and vegetation** pay items (bush hogging AC, pond bank mowing, string trimming) alongside stormwater items (skimmers, dewatering bags, basin cleanout, outlet protection, inlet cleaning, level spreaders).
 
 - **Jobs**: project name, job #, GC and superintendent, location (links to maps), permit/SWPPP #, scope notes.
@@ -47,6 +57,12 @@ It can also be hosted for free on GitHub Pages, Netlify or Cloudflare Pages. Ope
 
 On first launch, enter your name and role, then tap **Load a sample job** to explore.
 
+## Tests
+
+```sh
+node tests/voice.test.js   # voice parser
+```
+
 ## Limitations
 
 Data lives only in the browser on each device. The team shares information by exporting and importing files (Settings → Data, or a job's Info tab → "Send job data"). Real-time sync between phones would need a backend, which can be added later.
@@ -60,7 +76,9 @@ js/db.js              IndexedDB storage, export/import
 js/art.js             topographic contour backgrounds (fallback when a job has no photos)
 js/catalog.js         default BMP catalog, roles, conditions
 js/ui.js              helpers (sheets, toasts, image compression, downloads)
-js/pdf.js             daily report + quantity summary PDFs
+js/pdf.js             daily report, quantity summary and DVIR PDFs
+js/voice.js           speech recognition + spoken-summary parser
+js/fleet.js           fleet, vehicles and DVIR screens
 js/app.js             views and routing
 vendor/               jsPDF 2.5.2 + jspdf-autotable 3.8.4 (MIT)
 sw.js                 offline cache

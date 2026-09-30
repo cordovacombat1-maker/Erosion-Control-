@@ -64,6 +64,8 @@
     down: '<svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>',
     share: '<svg viewBox="0 0 24 24"><path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7M16 6l-4-4-4 4M12 2v13"/></svg>',
     edit: '<svg viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+    mic: '<svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/></svg>',
+    truck: '<svg viewBox="0 0 24 24"><path d="M1 16V6h13v10M14 9h4l4 4v3h-8"/><circle cx="6" cy="17.5" r="2"/><circle cx="17.5" cy="17.5" r="2"/></svg>',
     ruler: '<svg viewBox="0 0 24 24"><path d="M3 17l14-14 4 4L7 21zM7 13l2 2M10 10l2 2M13 7l2 2"/></svg>',
     users: '<svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></svg>',
   };
@@ -286,7 +288,7 @@
      ====================================================================== */
   async function jobsView(token) {
     setHeader('SiltLine', S.company || 'Erosion Control Field Log');
-    const [jobs, logs, reqs, rain] = await Promise.all([DB.all('jobs'), DB.all('logs'), DB.all('requests'), DB.all('rain')]);
+    const [jobs, logs, reqs, rain, vehicles, dvirs] = await Promise.all([DB.all('jobs'), DB.all('logs'), DB.all('requests'), DB.all('rain'), DB.all('vehicles'), DB.all('dvirs')]);
     if (stale(token)) return;
     const filter = sessionStorage.getItem('jobFilter') || 'active';
     const lastLog = {};
@@ -308,6 +310,13 @@
     });
     const overdue = reqs.filter((r) => r.status !== 'done' && r.due && r.due < t);
     if (overdue.length) alerts.push({ kind: 'bad', href: '#/requests', title: `${overdue.length} overdue request${overdue.length > 1 ? 's' : ''}`, detail: overdue.slice(0, 2).map((r) => r.title || r.desc).join(' · ') });
+    dvirs.filter((d) => d.status === 'defects').forEach((d) => {
+      const v = vehicles.find((x) => x.id === d.vehicleId);
+      alerts.push({ kind: 'bad', icon: ICON.truck, href: `#/dvir/${d.id}`, title: `${v ? 'Unit ' + v.unit : 'Vehicle'}: ${Fleet.defects(d).length} open defect${Fleet.defects(d).length > 1 ? 's' : ''}`, detail: Fleet.defects(d).map((x) => x.item).join(', ') });
+    });
+    if (vehicles.length && S.me && ['Foreman', 'Crew'].includes(S.me.role) && !dvirs.some((d) => d.date === t && d.kind === 'pre' && d.driverId === S.me.id && d.status !== 'draft')) {
+      alerts.push({ kind: 'draft', icon: ICON.truck, href: '#/fleet', title: 'Pre-trip not done today', detail: 'Inspect your truck before heading out' });
+    }
     const drafts = logs.filter((l) => !l.submittedAt && l.date < t);
     if (drafts.length) alerts.push({ kind: 'draft', href: `#/log/${drafts[0].id}`, title: `${drafts.length} log${drafts.length > 1 ? 's' : ''} not submitted`, detail: 'Finish up and send to the office' });
 
@@ -341,14 +350,14 @@
       </button>
       ${alerts.length ? `<div class="alerts">${alerts.map((a) => `
         <a class="alert ${a.kind}" href="${a.href}">
-          <span class="alert-icon">${a.kind === 'rain' ? STAT_ICON.rain : a.kind === 'bad' ? ICON.flag : a.kind === 'soon' ? ICON.check : ICON.doc}</span>
+          <span class="alert-icon">${a.icon ? a.icon : a.kind === 'rain' ? STAT_ICON.rain : a.kind === 'bad' ? ICON.flag : a.kind === 'soon' ? ICON.check : ICON.doc}</span>
           <span class="grow"><b>${esc(a.title)}</b><small>${esc(a.detail)}</small></span><span class="go">›</span>
         </a>`).join('')}</div>` : `<div class="all-good">${ICON.check}<span><b>All clear.</b> No inspections due, no overdue requests.</span></div>`}
       <div class="quick-grid">
-        <button class="tile t-log" data-act="start-log"><span>${ICON.doc}</span>Daily log</button>
+        <button class="tile t-voice" data-act="voice"><span>${ICON.mic}</span>Voice log</button>
         <button class="tile t-rain" data-act="rain"><span>${STAT_ICON.rain}</span>Rain gauge</button>
         <button class="tile t-req" data-act="req"><span>${ICON.flag}</span>Request</button>
-        <a class="tile t-chat" href="#/messages"><span>${ICON.chat}</span>Crew chat</a>
+        <a class="tile t-dvir" href="#/fleet"><span>${ICON.truck}</span>DVIR</a>
       </div>
       <h2 class="section-title">Month to date <small>${fmtDate(t, { month: 'long' })}</small></h2>
       <div class="fun-stats">${stats.map((s) => `
@@ -400,6 +409,7 @@
       if (a.dataset.act === 'demo') { await loadDemo(); route(); }
       if (a.dataset.act === 'start-log') pickJob('Start today’s log', (j) => openTodayLog(j));
       if (a.dataset.act === 'rain') pickJob('Log rain for…', (j) => rainForm(j));
+      if (a.dataset.act === 'voice') pickJob('Voice log for…', (j) => openTodayLog(j, { voice: true }));
       if (a.dataset.act === 'req') requestForm({});
     };
     const search = $('#jobSearch');
@@ -426,6 +436,7 @@
   }
 
   async function openTodayLog(job, opts) {
+    if (opts && opts.voice) sessionStorage.setItem('autoVoice', '1');
     const logs = await DB.by('logs', 'jobId', job.id);
     const existing = logs.find((l) => l.date === today());
     if (existing) {
@@ -450,6 +461,8 @@
     sheet('What are we logging?', `
       <div class="qa-grid">
         <button class="qa t-log" data-q="log"><span>${ICON.doc}</span><b>Daily log</b><small>Crew, BMPs, photos</small></button>
+        <button class="qa t-voice" data-q="voice"><span>${ICON.mic}</span><b>Voice log</b><small>Talk it in</small></button>
+        <button class="qa t-dvir" data-q="dvir"><span>${ICON.truck}</span><b>DVIR</b><small>Pre / post-trip</small></button>
         <button class="qa t-rain" data-q="rain"><span>${STAT_ICON.rain}</span><b>Rain event</b><small>Rain gauge reading</small></button>
         <button class="qa t-insp" data-q="insp"><span>${ICON.check}</span><b>Inspection</b><small>BMP checklist</small></button>
         <button class="qa t-req" data-q="req"><span>${ICON.flag}</span><b>Request</b><small>From GC / inspector</small></button>
@@ -463,6 +476,8 @@
         const q = b.dataset.q;
         setTimeout(() => {
           if (q === 'log') pickJob('Start today’s log', (j) => openTodayLog(j));
+          if (q === 'voice') pickJob('Voice log for…', (j) => openTodayLog(j, { voice: true }));
+          if (q === 'dvir') dvirChooser();
           if (q === 'rain') pickJob('Log rain for…', (j) => rainForm(j));
           if (q === 'insp') pickJob('Inspect which job?', (j) => openTodayLog(j, { inspection: true }));
           if (q === 'req') requestForm({});
@@ -470,6 +485,17 @@
           if (q === 'job') jobForm();
         }, 220);
       };
+    });
+  }
+
+  function dvirChooser() {
+    sheet('Vehicle inspection', `
+      <div class="qa-grid two">
+        <button class="qa" data-k="pre"><span>${ICON.truck}</span><b>Pre-trip</b><small>Before you roll</small></button>
+        <button class="qa" data-k="post"><span>${ICON.check}</span><b>Post-trip</b><small>End of day</small></button>
+      </div>
+      <a class="btn ghost block" href="#/fleet" style="margin-top:10px">Fleet &amp; past reports</a>`, (s, close) => {
+      s.querySelectorAll('[data-k]').forEach((b) => { b.onclick = () => { close(); setTimeout(() => Fleet.startDvir(b.dataset.k), 220); }; });
     });
   }
 
@@ -1081,6 +1107,11 @@
         <span id="saveState" class="save-state">Saved</span>
         ${log.submittedAt ? `<span class="pill ok">Submitted ${fmtWhen(log.submittedAt)}${log.submittedBy ? ' by ' + esc(log.submittedBy) : ''}</span>` : '<span class="pill">Draft</span>'}
       </div>
+      <button class="voice-bar" data-act="voice">
+        <span class="mic-dot">${ICON.mic}</span>
+        <span class="grow"><b>Talk it in</b><small>Say your crew, hours, footage and repairs. The log fills itself in.</small></span>
+        <span class="go">›</span>
+      </button>
       <section class="card sec">
         <div class="card-head"><h3>${ICON.doc}Day &amp; site conditions</h3></div>
         <div class="sec-body form">
@@ -1257,6 +1288,8 @@
           }
           rerender('photos'); await flush();
         });
+      } else if (act === 'voice') {
+        openVoice();
       } else if (act === 'pdf') {
         await flush();
         await makeDailyPdf(log, job);
@@ -1290,6 +1323,26 @@
       }
     };
 
+    function openVoice() {
+      const names = [...new Set([...S.people.map((p) => p.name), ...log.crew.map((c) => c.name).filter(Boolean)])];
+      voiceSheet({ catalog: S.catalog, people: names, me: S.me ? S.me.name : log.foreman }, async (v) => {
+        const n = applyVoice(log, v);
+        await flush();
+        if (v.rain) {
+          const trig = num(job.rainTrigger) || 0.5;
+          const exists = (await DB.by('rain', 'jobId', job.id)).some((r) => r.date === log.date && num(r.inches) === num(v.rain));
+          if (!exists) {
+            await DB.put('rain', { jobId: job.id, date: log.date, inches: num(v.rain), source: 'Voice log', by: S.me && S.me.name });
+            await systemMessage(job.id, num(v.rain) >= trig ? `logged ${fmtNum(v.rain)}" of rain — post-rain BMP inspection due within 24 hrs` : `logged ${fmtNum(v.rain)}" of rain`);
+            notify();
+          }
+        }
+        toast(n ? `Filled in ${n} item${n === 1 ? '' : 's'} — check it over` : 'Added to notes');
+        route();
+      });
+    }
+    if (sessionStorage.getItem('autoVoice')) { sessionStorage.removeItem('autoVoice'); setTimeout(openVoice, 250); }
+
     /* BMP types installed on this job so far – a starting list for the inspection. */
     function onSiteItems() {
       const seen = new Map();
@@ -1302,6 +1355,118 @@
       if (!seen.size) ['Perimeter silt fence', 'Inlet protection', 'Construction entrance'].forEach((n) => seen.set(n, { name: n, cond: '', note: '' }));
       return [...seen.values()];
     }
+  }
+
+  /* ---------- Voice entry for daily logs ---------- */
+  function voiceSheet(ctx, onApply) {
+    const tips = 'Started at 7. Me, Luis and Dante worked 9 hours. Installed 300 feet of silt fence along the north line and 4 inlet protections. Repaired 60 feet of silt fence at the southeast corner. Mowed 6 acres. Used 120 stakes and 3 rolls of fabric. Sunny, 75 degrees. Knocked off at 3:30.';
+    let session = null;
+    let base = '';
+    sheet('Talk it in', `
+      <div class="voice" id="voiceStep">
+        <button type="button" class="mic-btn" id="micBtn" aria-label="Start recording" ${Voice.supported ? '' : 'disabled'}>${ICON.mic}</button>
+        <p class="mic-state" id="micState">${Voice.supported ? 'Tap the mic and talk through your day' : 'Voice isn’t available in this browser — tap the box below and use your keyboard’s mic to dictate.'}</p>
+        <textarea id="vText" rows="6" placeholder="Your words show up here. You can fix anything before filling in the log."></textarea>
+        <details class="voice-tips"><summary>What should I say?</summary><p>Just talk like you’re calling the office. For example:</p><p class="tip-ex">“${esc(tips)}”</p>
+          <p class="muted small-text">It picks up crew names and hours, footage and counts for each BMP, repairs, mowing acres, materials, weather, temperature, rain and start/quit times. Everything you say is also saved to the notes.</p></details>
+        <button class="btn primary block" id="vGo">${ICON.check} Fill in the log</button>
+      </div>
+      <div id="reviewStep" hidden></div>`, (s, close) => {
+      const text = s.querySelector('#vText');
+      const btn = s.querySelector('#micBtn');
+      const state = s.querySelector('#micState');
+      const stop = () => { if (session) { session.stop(); session = null; } btn.classList.remove('live'); btn.setAttribute('aria-label', 'Start recording'); state.textContent = 'Tap the mic to keep talking'; };
+      btn.onclick = () => {
+        if (session) { stop(); return; }
+        base = text.value.trim() ? text.value.trim() + ' ' : '';
+        session = Voice.listen({
+          onText: (fin, interim) => { text.value = base + fin + interim; text.scrollTop = text.scrollHeight; },
+          onEnd: () => {},
+          onError: (err) => { stop(); state.textContent = err === 'not-allowed' ? 'Microphone blocked — allow mic access for this site in your browser settings.' : 'Voice stopped (' + err + '). Tap to try again.'; },
+        });
+        btn.classList.add('live');
+        btn.setAttribute('aria-label', 'Stop recording');
+        state.textContent = 'Listening… tap to stop';
+      };
+      $('#sheetBackdrop').addEventListener('click', stop, { once: true });
+      s.querySelector('[data-close]').addEventListener('click', stop, { once: true });
+
+      s.querySelector('#vGo').onclick = () => {
+        stop();
+        const said = text.value.trim();
+        if (!said) { toast('Say or type something first'); return; }
+        const r = Voice.parse(said, ctx);
+        showReview(r);
+      };
+
+      function showReview(r) {
+        const rows = [];
+        const add = (group, i, main, sub) => rows.push(`<label class="rv"><input type="checkbox" checked data-g="${group}" data-i="${i}"><span class="grow"><b>${main}</b>${sub ? `<small>${sub}</small>` : ''}</span></label>`);
+        r.crew.forEach((c, i) => add('crew', i, esc(c.name), c.hours ? `${esc(c.hours)} hrs` : 'hours not heard'));
+        if (r.allHours) add('allHours', 0, `Everyone: ${esc(r.allHours)} hrs`, 'applied to crew without hours');
+        r.bmps.forEach((b, i) => add('bmps', i, `${fmtNum(b.qty)} ${esc(b.unit)} ${esc(b.name)}`, b.where ? esc(b.where) : 'Installed'));
+        r.maint.forEach((m, i) => add('maint', i, `${esc(m.kind)}: ${m.qty ? fmtNum(m.qty) + ' ' + esc(m.unit) + ' ' : ''}${esc(m.name)}`, esc(m.desc)));
+        r.materials.forEach((m, i) => add('materials', i, `${fmtNum(m.qty)} ${esc(m.unit)} ${esc(m.item)}`, 'Material'));
+        if (r.weather) add('weather', 0, `Weather: ${esc(r.weather)}`);
+        if (r.temp) add('temp', 0, `Temp: ${esc(r.temp)}°F`);
+        if (r.start) add('start', 0, `Start: ${esc(r.start)}`);
+        if (r.end) add('end', 0, `End: ${esc(r.end)}`);
+        if (r.rain) add('rain', 0, `Rain: ${esc(r.rain)}"`, 'Also saved to the rain gauge');
+        add('notes', 0, 'Add what you said to notes');
+        const count = rows.length - 1;
+        s.querySelector('#voiceStep').hidden = true;
+        const rv = s.querySelector('#reviewStep');
+        rv.hidden = false;
+        rv.innerHTML = `
+          <p class="rv-head">${count ? `Heard <b>${count}</b> item${count === 1 ? '' : 's'}. Uncheck anything that’s wrong.` : 'Couldn’t pick out quantities or names — you can still save it to the notes, or go back and add detail like “300 feet of silt fence”.'}</p>
+          <div class="rv-list">${rows.join('')}</div>
+          <div class="row-actions"><button class="btn ghost" id="rvBack">Back</button><button class="btn primary" id="rvApply">${ICON.check} Add to log</button></div>`;
+        rv.querySelector('#rvBack').onclick = () => { rv.hidden = true; s.querySelector('#voiceStep').hidden = false; };
+        rv.querySelector('#rvApply').onclick = async () => {
+          const keep = {};
+          rv.querySelectorAll('input[type=checkbox]').forEach((c) => { (keep[c.dataset.g] = keep[c.dataset.g] || {})[c.dataset.i] = c.checked; });
+          const on = (g, i = 0) => keep[g] && keep[g][i];
+          const pick = {
+            crew: r.crew.filter((_, i) => on('crew', i)),
+            allHours: on('allHours') ? r.allHours : '',
+            bmps: r.bmps.filter((_, i) => on('bmps', i)),
+            maint: r.maint.filter((_, i) => on('maint', i)),
+            materials: r.materials.filter((_, i) => on('materials', i)),
+            weather: on('weather') ? r.weather : '', temp: on('temp') ? r.temp : '',
+            start: on('start') ? r.start : '', end: on('end') ? r.end : '',
+            rain: on('rain') ? r.rain : '', notes: on('notes') ? r.transcript : '',
+          };
+          close();
+          await onApply(pick);
+        };
+      }
+    });
+  }
+
+  /* Merge a reviewed voice result into a log. */
+  function applyVoice(log, v) {
+    let n = 0;
+    v.crew.forEach((c) => {
+      const cur = log.crew.find((x) => x.name.trim().toLowerCase() === c.name.toLowerCase());
+      if (cur) { if (c.hours) cur.hours = c.hours; } else log.crew.push({ name: c.name, hours: c.hours });
+      n++;
+    });
+    log.crew = log.crew.filter((c) => c.name.trim() || c.hours);
+    if (v.allHours) log.crew.forEach((c) => { if (!c.hours) { c.hours = v.allHours; n++; } });
+    v.bmps.forEach((b) => { log.bmps.push({ code: b.code, name: b.name, unit: b.unit, qty: b.qty, where: b.where || '' }); n++; });
+    v.maint.forEach((m) => { log.maint.push({ code: m.code, name: m.name, unit: m.unit, qty: m.qty, kind: m.kind, desc: m.desc }); n++; });
+    v.materials.forEach((m) => {
+      const cur = log.materials.find((x) => x.item.toLowerCase() === m.item.toLowerCase() && x.unit === m.unit);
+      if (cur) cur.qty = String(num(cur.qty) + num(m.qty)); else log.materials.push({ item: m.item, qty: m.qty, unit: m.unit });
+      n++;
+    });
+    if (v.weather) { log.weather = v.weather; n++; }
+    if (v.temp) { log.temp = v.temp; n++; }
+    if (v.start) { log.start = v.start; n++; }
+    if (v.end) { log.end = v.end; n++; }
+    if (v.rain && log.inspection && log.inspection.enabled && !log.inspection.rain) log.inspection.rain = v.rain;
+    if (v.notes) log.notes = (log.notes ? log.notes.trim() + '\n\n' : '') + 'Voice: ' + v.notes;
+    return n;
   }
 
   function photoSheet(p, done) {
@@ -1619,6 +1784,11 @@
         </div>
       </section>
 
+      <a class="card settings-link" href="#/fleet">
+        <span class="chan-icon all">${ICON.truck}</span>
+        <span class="grow"><b>Fleet &amp; DVIRs</b><small>Trucks, trailers, equipment, inspection reports</small></span><span class="go">›</span>
+      </a>
+
       <section class="card">
         <div class="card-head"><h3>Company</h3></div>
         <div class="pad form"><label class="mini">Company name (shown on reports)<input id="companyIn" value="${esc(S.company)}" placeholder="Your company name"></label></div>
@@ -1881,5 +2051,13 @@
     }
   }
 
-  boot();
+  /* Internal API for feature modules (fleet.js, voice UI). */
+  window.SL = {
+    S, ICON, app, setHeader, route, notify, systemMessage, notFound, deliverPdf,
+    stale: (t) => stale(t),
+    addRoute: (re, fn, tab) => routes.push([re, fn, tab]),
+  };
+
+  // Feature modules load after this file and register their routes before first render.
+  document.addEventListener('DOMContentLoaded', boot);
 })();

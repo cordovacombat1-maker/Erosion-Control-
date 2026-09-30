@@ -3,7 +3,7 @@
   'use strict';
 
   const DB_NAME = 'siltline';
-  const DB_VERSION = 2;
+  const DB_VERSION = 3;
   const STORES = {
     jobs: [],
     logs: ['jobId', 'date'],
@@ -12,6 +12,8 @@
     photos: ['logId', 'jobId'],
     people: [],
     rain: ['jobId'],
+    vehicles: [],
+    dvirs: ['vehicleId'],
     kv: null, // key-value store for settings, keyed by explicit key
   };
 

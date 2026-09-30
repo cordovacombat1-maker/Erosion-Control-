@@ -310,5 +310,65 @@
     return d.output('blob');
   }
 
-  window.PDF = { dailyReport, quantityReport };
+  /* Driver Vehicle Inspection Report (pre-trip / post-trip). */
+  function dvirReport({ dvir, vehicle, trailer, checklists, defects, company, job }) {
+    const d = doc();
+    const kind = dvir.kind === 'post' ? 'Post-trip' : 'Pre-trip';
+    let y = header(d, 'Driver Vehicle Inspection Report', company, `${kind} · ${date(dvir.date, { month: 'short', day: 'numeric', year: 'numeric' })}`);
+    const isEquip = vehicle && vehicle.type === 'Equipment';
+    y = infoGrid(d, y, [
+      ['Report type', kind],
+      ['Date / time', `${date(dvir.date, { month: 'short', day: 'numeric', year: 'numeric' })}${dvir.time ? ' ' + dvir.time : ''}`],
+      [isEquip ? 'Equipment' : 'Vehicle', vehicle ? `Unit ${vehicle.unit}${vehicle.desc ? ' – ' + vehicle.desc : ''}` : '—'],
+      ['Plate', vehicle && vehicle.plate],
+      ['Trailer', trailer ? `Unit ${trailer.unit}${trailer.desc ? ' – ' + trailer.desc : ''}${trailer.plate ? ' (' + trailer.plate + ')' : ''}` : 'None'],
+      [isEquip ? 'Hour meter' : 'Odometer', dvir.odometer],
+      ['Driver / operator', dvir.driver],
+      ['Job', job && job.name],
+    ].filter((p) => p[1]));
+
+    checklists.forEach((g) => {
+      y = sectionTitle(d, y + 2, g.title);
+      const rows = g.list.map((name) => {
+        const v = (dvir.items || {})[g.prefix + name];
+        return [name, v === 'def' ? 'DEFECT' : v === 'ok' ? 'OK' : '—', v === 'def' ? ((dvir.notes || {})[g.prefix + name] || '') : ''];
+      });
+      y = table(d, y, ['Item', 'Condition', 'Defect description'], rows, {
+        columnStyles: { 1: { cellWidth: 70 } },
+        didParseCell: (h) => {
+          if (h.section !== 'body' || h.column.index !== 1) return;
+          if (h.cell.raw === 'DEFECT') { h.cell.styles.textColor = [178, 52, 40]; h.cell.styles.fontStyle = 'bold'; }
+          if (h.cell.raw === 'OK') h.cell.styles.textColor = [46, 125, 80];
+        },
+      });
+    });
+
+    y = sectionTitle(d, y, 'Condition');
+    y = paragraph(d, y + 6, defects.length
+      ? `${defects.length} defect(s) reported. ${dvir.status === 'corrected' ? '' : 'Vehicle requires mechanic review before the next trip.'}`
+      : 'No defects found that would affect the safe operation of this vehicle.');
+    if (dvir.remarks) { y = sectionTitle(d, y, 'Remarks'); y = paragraph(d, y + 6, dvir.remarks); }
+
+    // Driver signature
+    y = ensure(d, y + 6, 90);
+    d.setFont('helvetica', 'normal'); d.setFontSize(8.5); d.setTextColor(...MUTED);
+    d.text('I certify that I have inspected this vehicle as indicated above.', M, y);
+    if (dvir.sig) { try { d.addImage(dvir.sig, 'PNG', M, y + 4, 180, 50, undefined, 'FAST'); } catch (_) { /* ignore */ } }
+    d.setDrawColor(...SOIL); d.setLineWidth(0.6);
+    d.line(M, y + 58, M + 220, y + 58);
+    d.text(`Driver: ${dvir.driver || ''}${dvir.signedAt ? '  ·  ' + new Date(dvir.signedAt).toLocaleString('en-US') : ''}`, M, y + 70);
+    y += 104;
+
+    if (defects.length) {
+      y = sectionTitle(d, y, 'Mechanic / supervisor certification');
+      const c = dvir.correction;
+      y = paragraph(d, y + 6, c
+        ? `${c.needNot ? '[X] Defects need not be corrected for safe operation' : '[X] Defects corrected'}${c.note ? ' — ' + c.note : ''}\nSigned: ${c.by || ''}  ·  ${new Date(c.at).toLocaleString('en-US')}`
+        : '[ ] Defects corrected     [ ] Defects need not be corrected for safe operation\n\nMechanic signature: ______________________________   Date: ____________');
+    }
+    footers(d, `DVIR · Unit ${vehicle ? vehicle.unit : ''} · ${kind} ${dvir.date} · generated ${new Date().toLocaleString('en-US')}`);
+    return d.output('blob');
+  }
+
+  window.PDF = { dailyReport, quantityReport, dvirReport };
 })();
