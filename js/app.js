@@ -320,12 +320,18 @@
     if (stale(token)) return;
     const heroJob = shown.find((j) => photos[j.id]) || jobs.find((j) => photos[j.id]);
     const openTotal = Object.values(openReq).reduce((x, y) => x + y, 0);
+    const inspDue = Object.values(storm).filter((st) => st.state !== 'ok').length;
 
     app.innerHTML = `
       ${photoBanner(`
         <p class="eyebrow light">${fmtDate(t, { weekday: 'long', month: 'long', day: 'numeric' })}</p>
         <h1>Good ${hello.toLowerCase()}, ${esc(name)}</h1>
-        <p class="hero-sub">${active.length} active job${active.length === 1 ? '' : 's'} · ${openTotal} open request${openTotal === 1 ? '' : 's'}</p>`,
+        ${S.company ? `<p class="hero-sub">${esc(S.company)}</p>` : ''}
+      </div>
+      <div class="board">
+        <div><b>${active.length}</b><span>Active jobs</span></div>
+        <div class="${openTotal ? 'hot' : ''}"><b>${openTotal}</b><span>Open requests</span></div>
+        <div class="${inspDue ? 'hot' : ''}"><b>${inspDue}</b><span>Inspections due</span></div>`,
       heroJob && photos[heroJob.id], heroJob && `${heroJob.name}${photos[heroJob.id].caption ? ' · ' + photos[heroJob.id].caption : ''}`)}
       ${jobs.length ? `
       <button class="cta" data-act="start-log">
@@ -680,7 +686,7 @@
 
     body.innerHTML = `
       <div class="storm-status ${st.state}">
-        <div class="storm-art">${Art.topo(job.id, st.state === 'ok' ? 'green' : 'water')}</div>
+        <div class="storm-art">${Art.topo(job.id, st.state === 'ok' ? 'steel' : 'water')}</div>
         <div class="storm-text">
           <b>${esc(st.title)}</b>
           <span>${esc(st.detail)}</span>

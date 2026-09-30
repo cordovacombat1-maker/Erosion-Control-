@@ -3,6 +3,7 @@
   'use strict';
 
   const TONES = {
+    steel: ['#14171a', '#262c32', 'rgba(255,194,14,.5)', 'rgba(255,255,255,.08)'],
     green: ['#1f3b2d', '#2b5139', 'rgba(224,164,58,.55)', 'rgba(255,255,255,.12)'],
     water: ['#173447', '#23506b', 'rgba(140,192,230,.6)', 'rgba(255,255,255,.12)'],
     soil:  ['#3b2a1d', '#5a3f2b', 'rgba(224,164,58,.5)', 'rgba(255,255,255,.1)'],
@@ -15,8 +16,8 @@
   }
 
   /* Deterministic contour lines around a "hill" so each job gets its own pattern. */
-  function topo(seed = 'siltline', tone = 'green') {
-    const [bg1, bg2, index, line] = TONES[tone] || TONES.green;
+  function topo(seed = 'siltline', tone = 'steel') {
+    const [bg1, bg2, index, line] = TONES[tone] || TONES.steel;
     let r = hash(seed);
     const rnd = () => ((r = Math.imul(r ^ (r >>> 15), 2246822507) >>> 0) / 4294967296);
     const cx = 120 + rnd() * 160, cy = 60 + rnd() * 100;

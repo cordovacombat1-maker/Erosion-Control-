@@ -5,8 +5,8 @@
   "start_url": "./index.html#/jobs",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#f3f0e8",
-  "theme_color": "#1f3b2d",
+  "background_color": "#eceef0",
+  "theme_color": "#16191c",
   "icons": [
     { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
   ]

@@ -2,12 +2,12 @@
 (function () {
   'use strict';
 
-  const GREEN = [31, 59, 45];
-  const STRAW = [224, 164, 58];
+  const GREEN = [22, 25, 28];
+  const STRAW = [255, 194, 14];
   const SOIL = [122, 86, 58];
   const INK = [33, 37, 34];
   const MUTED = [110, 116, 110];
-  const LINE = [218, 214, 204];
+  const LINE = [216, 220, 224];
   const M = 40; // page margin (pt)
 
   const n = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : 0; };
@@ -26,7 +26,7 @@
     d.setFillColor(...GREEN);
     d.rect(0, 0, W, 78, 'F');
     // topo contour accent
-    d.setDrawColor(52, 88, 66);
+    d.setDrawColor(48, 54, 60);
     d.setLineWidth(0.8);
     for (let i = 0; i < 5; i++) {
       d.lines([[70, -9], [80, 11], [90, -7], [110, 9]], W - 350, 12 + i * 14, [1, 1], 'S');
@@ -116,9 +116,9 @@
       margin: { left: M, right: M },
       theme: 'grid',
       styles: { font: 'helvetica', fontSize: 9, cellPadding: 5, lineColor: LINE, lineWidth: 0.5, textColor: INK },
-      headStyles: { fillColor: [241, 237, 226], textColor: GREEN, fontStyle: 'bold' },
-      footStyles: { fillColor: [241, 237, 226], textColor: INK, fontStyle: 'bold' },
-      alternateRowStyles: { fillColor: [251, 250, 246] },
+      headStyles: { fillColor: [236, 239, 241], textColor: GREEN, fontStyle: 'bold' },
+      footStyles: { fillColor: [236, 239, 241], textColor: INK, fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [248, 249, 250] },
       columnStyles: opts.columnStyles || {},
       showFoot: 'lastPage',
       didParseCell: opts.didParseCell,
