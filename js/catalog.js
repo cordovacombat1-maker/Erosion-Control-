@@ -48,19 +48,9 @@
 
   const STORMWATER_CATS = ['Stormwater', 'Inlets', 'Channels'];
 
-  const TAGLINES = [
-    'Keep the dirt on site.',
-    'Silt happens. We stop it.',
-    'Mud stays here.',
-    'Fences up, stakes down.',
-    'Every inch of rain counts.',
-    'Green grass, clean water.',
-    'Hold the line.',
-  ];
-
   const WEATHER = ['Clear', 'Partly cloudy', 'Overcast', 'Light rain', 'Heavy rain', 'Windy', 'Snow', 'Freezing'];
 
   const UNITS = ['LF', 'EA', 'SY', 'SF', 'AC', 'TON', 'CY', 'GAL', 'HR', 'BAG', 'ROLL', 'LS'];
 
-  window.Catalog = { DEFAULT_CATALOG, CATALOG_VERSION, STORMWATER_CATS, TAGLINES, ROLES, REQUEST_SOURCES, CONDITIONS, WEATHER, UNITS };
+  window.Catalog = { DEFAULT_CATALOG, CATALOG_VERSION, STORMWATER_CATS, ROLES, REQUEST_SOURCES, CONDITIONS, WEATHER, UNITS };
 })();

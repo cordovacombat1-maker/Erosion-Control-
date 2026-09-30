@@ -136,7 +136,6 @@
       $$('#tabbar a').forEach((a) => a.classList.toggle('active', a.dataset.tab === tab));
       document.body.dataset.view = fn.name;
       app.onclick = app.oninput = app.onchange = null;
-      clearInterval(heroTimer);
       const token = ++renderToken;
       try {
         await fn(...m.slice(1), token);
@@ -231,52 +230,45 @@
     return { state: 'ok', last, next, trigger, freq, title: 'Inspections current', detail: `Next routine ${fmtShort(next)}${last ? ` · last ${fmtShort(last)}` : ''}` };
   }
 
-  let heroTimer = null;
+  /* Real site photos: a job's cover photo, else the latest photo attached to one of its logs. */
+  async function jobPhotos(jobs) {
+    const out = {};
+    await Promise.all(jobs.map(async (j) => {
+      const id = j.coverId || j.lastPhotoId;
+      const p = id ? await DB.get('photos', id) : null;
+      if (p) out[j.id] = p;
+    }));
+    return out;
+  }
 
-  /* Crossfading illustrated banner. */
-  function sceneHero(inner, scenes = Art.ORDER) {
-    const start = new Date().getDate() % scenes.length;
-    return `<section class="scene-hero">
-      <div class="scene-stage">${scenes.map((s, i) => `<div class="scene ${i === start ? 'on' : ''}">${Art.scene(s)}</div>`).join('')}</div>
-      <div class="scene-shade"></div>
-      <div class="scene-overlay">${inner}</div>
-      ${scenes.length > 1 ? `<div class="scene-dots">${scenes.map((s, i) => `<button data-scene="${i}" class="${i === start ? 'on' : ''}" aria-label="Scene ${i + 1}"></button>`).join('')}</div>` : ''}
+  function coverHtml(photo, seed, tone) {
+    return photo ? `<img class="cover-img" src="${photo.dataUrl}" alt="${esc(photo.caption || 'Site photo')}">` : Art.topo(seed, tone);
+  }
+
+  function photoBanner(inner, photo, caption) {
+    return `<section class="photo-hero ${photo ? 'has-photo' : ''}">
+      ${coverHtml(photo, 'home')}
+      <div class="photo-shade"></div>
+      <div class="photo-overlay">${inner}</div>
+      ${photo && caption ? `<span class="photo-cap">${ICON.cam}${esc(caption)}</span>` : ''}
     </section>`;
   }
 
-  function startSceneRotation(root) {
-    clearInterval(heroTimer);
-    const scenes = $$('.scene-hero .scene', root);
-    const dots = $$('.scene-dots button', root);
-    if (scenes.length < 2) return;
-    let i = scenes.findIndex((s) => s.classList.contains('on'));
-    const show = (k) => {
-      i = (k + scenes.length) % scenes.length;
-      scenes.forEach((s, j) => s.classList.toggle('on', j === i));
-      dots.forEach((d, j) => d.classList.toggle('on', j === i));
-    };
-    dots.forEach((d) => { d.onclick = (e) => { e.stopPropagation(); show(+d.dataset.scene); startSceneRotation(root); }; });
-    heroTimer = setInterval(() => show(i + 1), 7000);
-  }
-
-  /* Fun conversions that make the month's numbers mean something on the jobsite. */
-  function funStats(logs, rain) {
+  /* Month-to-date production numbers across all jobs. */
+  function monthStats(logs, rain) {
     const t = today();
     const from = t.slice(0, 8) + '01';
     const tot = computeTotals(logs, from, t, false);
     const get = (...codes) => tot.rows.filter((r) => codes.includes(r.code)).reduce((a, r) => a + r.installed + r.maint, 0);
-    const lfFence = get('SF', 'SSF');
-    const lfWattle = get('WAT', 'CFS');
-    const inlets = get('IP', 'CIP', 'INLC');
-    const acres = get('MOW', 'POND_MOW');
-    const rainIn = rain.filter((r) => r.date >= from).reduce((a, r) => a + num(r.inches), 0);
+    const mRain = rain.filter((r) => r.date >= from);
+    const jobsWorked = new Set(logs.filter((l) => l.date >= from).map((l) => l.jobId)).size;
     return [
-      { k: 'fence', big: fmtNum(lfFence, 0), unit: 'LF', label: 'Silt fence', fun: `≈ ${fmtNum(lfFence / 360, 1)} football fields long` },
-      { k: 'wattle', big: fmtNum(lfWattle, 0), unit: 'LF', label: 'Wattles & socks', fun: `≈ ${fmtNum(lfWattle / 5280, 2)} miles of straw` },
-      { k: 'inlet', big: fmtNum(inlets, 0), unit: 'EA', label: 'Inlets protected', fun: inlets ? 'Storm drains say thanks' : 'Protect the drains!' },
-      { k: 'mow', big: fmtNum(acres, 1), unit: 'AC', label: 'Mowed', fun: `≈ ${fmtNum(acres / 1.32, 1)} football fields cut` },
-      { k: 'rain', big: fmtNum(rainIn, 2), unit: 'IN', label: 'Rain logged', fun: `≈ ${fmtNum(rainIn * 27154, 0)} gal of runoff per acre` },
-      { k: 'hours', big: fmtNum(tot.hours, 0), unit: 'HRS', label: 'Crew hours', fun: `≈ ${fmtNum(tot.hours / 8, 0)} crew-days in the dirt` },
+      { k: 'fence', big: fmtNum(get('SF', 'SSF'), 0), unit: 'LF', label: 'Silt fence', sub: 'Installed + maintained' },
+      { k: 'wattle', big: fmtNum(get('WAT', 'CFS'), 0), unit: 'LF', label: 'Wattles & socks', sub: 'Installed + maintained' },
+      { k: 'inlet', big: fmtNum(get('IP', 'CIP', 'INLC'), 0), unit: 'EA', label: 'Inlet protection', sub: 'Installed, repaired, cleaned' },
+      { k: 'mow', big: fmtNum(get('MOW', 'POND_MOW'), 1), unit: 'AC', label: 'Mowing', sub: 'Bush hog + pond banks' },
+      { k: 'rain', big: fmtNum(mRain.reduce((a, r) => a + num(r.inches), 0), 2), unit: 'IN', label: 'Rainfall', sub: `${mRain.length} gauge reading${mRain.length === 1 ? '' : 's'}` },
+      { k: 'hours', big: fmtNum(tot.hours, 0), unit: 'HRS', label: 'Crew hours', sub: `${tot.days} work day${tot.days === 1 ? '' : 's'} · ${jobsWorked} job${jobsWorked === 1 ? '' : 's'}` },
     ];
   }
 
@@ -322,15 +314,19 @@
     const hour = new Date().getHours();
     const hello = hour < 12 ? 'Morning' : hour < 17 ? 'Afternoon' : 'Evening';
     const name = S.me ? S.me.name.split(' ')[0] : 'boss';
-    const tagline = Catalog.TAGLINES[new Date().getDate() % Catalog.TAGLINES.length];
     const todayJob = active.length === 1 ? active[0] : null;
-    const stats = funStats(logs, rain);
+    const stats = monthStats(logs, rain);
+    const photos = await jobPhotos(jobs);
+    if (stale(token)) return;
+    const heroJob = shown.find((j) => photos[j.id]) || jobs.find((j) => photos[j.id]);
+    const openTotal = Object.values(openReq).reduce((x, y) => x + y, 0);
 
     app.innerHTML = `
-      ${sceneHero(`
+      ${photoBanner(`
         <p class="eyebrow light">${fmtDate(t, { weekday: 'long', month: 'long', day: 'numeric' })}</p>
-        <h1>${hello}, ${esc(name)}</h1>
-        <p class="tagline">${esc(tagline)}</p>`)}
+        <h1>Good ${hello.toLowerCase()}, ${esc(name)}</h1>
+        <p class="hero-sub">${active.length} active job${active.length === 1 ? '' : 's'} · ${openTotal} open request${openTotal === 1 ? '' : 's'}</p>`,
+      heroJob && photos[heroJob.id], heroJob && `${heroJob.name}${photos[heroJob.id].caption ? ' · ' + photos[heroJob.id].caption : ''}`)}
       ${jobs.length ? `
       <button class="cta" data-act="start-log">
         <span class="cta-icon">${ICON.doc}</span>
@@ -348,10 +344,10 @@
         <button class="tile t-req" data-act="req"><span>${ICON.flag}</span>Request</button>
         <a class="tile t-chat" href="#/messages"><span>${ICON.chat}</span>Crew chat</a>
       </div>
-      <h2 class="section-title">This month in the dirt</h2>
+      <h2 class="section-title">Month to date <small>${fmtDate(t, { month: 'long' })}</small></h2>
       <div class="fun-stats">${stats.map((s) => `
         <div class="fun ${s.k}"><span class="fun-icon">${STAT_ICON[s.k]}</span>
-          <b>${s.big}<small>${s.unit}</small></b><span class="fun-label">${s.label}</span><span class="fun-sub">${esc(s.fun)}</span></div>`).join('')}
+          <b>${s.big}<small>${s.unit}</small></b><span class="fun-label">${s.label}</span><span class="fun-sub">${esc(s.sub)}</span></div>`).join('')}
       </div>
       <h2 class="section-title">Jobs <small>${active.length} active</small></h2>
       <div class="toolbar">
@@ -365,7 +361,7 @@
           const st = storm[j.id];
           return `
           <a class="card job-card" href="#/job/${j.id}" data-search="${esc((j.name + ' ' + (j.gc || '') + ' ' + (j.location || '') + ' ' + (j.number || '')).toLowerCase())}">
-            <div class="job-thumb">${Art.scene(Art.forId(j.id))}</div>
+            <div class="job-thumb">${coverHtml(photos[j.id], j.id)}</div>
             <div class="job-body">
               <div class="job-top">
                 <h3>${esc(j.name)}</h3>
@@ -382,14 +378,13 @@
       </div>
       ${!jobs.length ? `
         <div class="empty">
-          <h3>Let’s get your first job on the board</h3>
+          <h3>No jobs yet</h3>
           <p class="muted">Add a project, then log crews, silt fence, inlet protection, mowing, rain events and photos every day.</p>
           <button class="btn primary" data-act="new-job">${ICON.plus} New job</button>
           <button class="btn ghost" data-act="demo">Load a sample job</button>
         </div>` : shown.length ? '' : '<p class="muted center pad">No jobs in this view.</p>'}
       ${jobs.length ? `<button class="btn soft block add-job" data-act="new-job">${ICON.plus} New job</button>` : ''}`;
 
-    startSceneRotation(app);
     app.onclick = async (e) => {
       const f = e.target.closest('[data-filter]');
       if (f) { sessionStorage.setItem('jobFilter', f.dataset.filter); route(); return; }
@@ -413,8 +408,9 @@
     const jobs = (await DB.all('jobs')).filter((j) => j.status !== 'complete').sort((a, b) => a.name.localeCompare(b.name));
     if (!jobs.length) { toast('Create a job first'); jobForm(); return; }
     if (jobs.length === 1) { cb(jobs[0]); return; }
+    const photos = await jobPhotos(jobs);
     sheet(title, `<div class="pick-list">${jobs.map((j) => `
-      <button class="pick" data-jid="${j.id}"><span class="pick-thumb">${Art.scene(Art.forId(j.id))}</span>
+      <button class="pick" data-jid="${j.id}"><span class="pick-thumb">${coverHtml(photos[j.id], j.id)}</span>
         <span class="grow"><b>${esc(j.name)}</b><small>${esc(j.gc || j.location || '')}</small></span></button>`).join('')}</div>`,
     (s, close) => {
       s.querySelectorAll('[data-jid]').forEach((b) => {
@@ -513,24 +509,7 @@
     });
   }
 
-  function confetti() {
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    const box = document.createElement('div');
-    box.className = 'confetti';
-    const colors = ['#e0a43a', '#5c8d3b', '#e0662a', '#1c1c1c', '#3a7ca5', '#a8763f'];
-    for (let i = 0; i < 46; i++) {
-      const p = document.createElement('i');
-      p.style.left = Math.random() * 100 + 'vw';
-      p.style.background = colors[i % colors.length];
-      p.style.animationDelay = Math.random() * 0.4 + 's';
-      p.style.animationDuration = 1.4 + Math.random() * 1.2 + 's';
-      p.style.setProperty('--r', (Math.random() * 720 - 360) + 'deg');
-      p.style.setProperty('--x', (Math.random() * 120 - 60) + 'px');
-      box.appendChild(p);
-    }
-    document.body.appendChild(box);
-    setTimeout(() => box.remove(), 3200);
-  }
+
 
   function jobForm(job) {
     const j = job || { status: 'active', start: today() };
@@ -584,6 +563,8 @@
     const openCount = reqs.filter((r) => r.status !== 'done').length;
     const unread = (await unreadCounts(msgs))[id] || 0;
     const st = stormStatus(job, logs, rain);
+    const cover = (await jobPhotos([job]))[job.id];
+    if (stale(token)) return;
 
     const tabs = [
       ['logs', 'Daily logs', logs.length],
@@ -596,7 +577,9 @@
 
     app.innerHTML = `
       <section class="job-hero">
-        <div class="job-art">${Art.scene(Art.forId(job.id))}</div>
+        <div class="job-art">${coverHtml(cover, job.id)}
+          <button class="cover-btn" data-act="cover">${ICON.cam}${cover ? 'Change photo' : 'Add cover photo'}</button>
+          <input type="file" accept="image/*" id="coverIn" hidden></div>
         <div class="job-hero-body">
           <div class="job-hero-meta">
             ${job.number ? `<span class="tag">#${esc(job.number)}</span>` : ''}
@@ -624,6 +607,19 @@
       if (a.dataset.act === 'new-log') openTodayLog(job);
       if (a.dataset.act === 'rain') rainForm(job);
       if (a.dataset.act === 'new-req') requestForm({ jobId: id });
+      if (a.dataset.act === 'cover') $('#coverIn').click();
+    };
+    $('#coverIn').onchange = async (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      const img = await UI.compressImage(f);
+      const old = job.coverId;
+      const p = await DB.put('photos', { jobId: job.id, logId: null, cover: true, dataUrl: img.dataUrl, w: img.width, h: img.height, caption: '', by: S.me && S.me.name });
+      job.coverId = p.id;
+      await DB.put('jobs', job);
+      if (old) await DB.del('photos', old);
+      toast('Cover photo updated');
+      route();
     };
 
     const body = $('#tabBody');
@@ -684,7 +680,7 @@
 
     body.innerHTML = `
       <div class="storm-status ${st.state}">
-        <div class="storm-art">${Art.stormwater()}</div>
+        <div class="storm-art">${Art.topo(job.id, st.state === 'ok' ? 'green' : 'water')}</div>
         <div class="storm-text">
           <b>${esc(st.title)}</b>
           <span>${esc(st.detail)}</span>
@@ -764,7 +760,7 @@
 
   function renderLogsTab(body, job, logs) {
     if (!logs.length) {
-      body.innerHTML = `<div class="empty small"><div class="empty-scene">${Art.slope()}</div><h3>No daily logs</h3><p class="muted">Tap “New daily log” to record today’s crew, BMPs and photos.</p></div>`;
+      body.innerHTML = `<div class="empty small"><h3>No daily logs</h3><p class="muted">Tap “New daily log” to record today’s crew, BMPs and photos.</p></div>`;
       return;
     }
     body.innerHTML = `<div class="list">${logs.map((l) => {
@@ -1161,8 +1157,10 @@
             const img = await UI.compressImage(f);
             const p = await DB.put('photos', { jobId: job.id, logId: log.id, dataUrl: img.dataUrl, w: img.width, h: img.height, caption: '', by: S.me && S.me.name });
             photos.push(p);
+            job.lastPhotoId = p.id;
           } catch (err) { toast(err.message); }
         }
+        await DB.put('jobs', job);
         rerender('photos');
         await flush();
         toast('Photos saved');
@@ -1247,7 +1245,10 @@
       } else if (act === 'photo') {
         const p = photos.find((x) => x.id === b.dataset.id);
         photoSheet(p, async (deleted) => {
-          if (deleted) photos.splice(photos.indexOf(p), 1);
+          if (deleted) {
+            photos.splice(photos.indexOf(p), 1);
+            if (job.lastPhotoId === p.id) { job.lastPhotoId = photos.length ? photos[photos.length - 1].id : null; await DB.put('jobs', job); }
+          }
           rerender('photos'); await flush();
         });
       } else if (act === 'pdf') {
@@ -1267,13 +1268,13 @@
         const summary = log.bmps.filter((x) => num(x.qty)).map((x) => `${fmtNum(x.qty)} ${x.unit} ${shortName(x)}`).join(', ');
         await systemMessage(job.id, `${first ? 'submitted' : 'updated'} the daily log for ${fmtDate(log.date)} — ${log.crew.length} crew, ${fmtNum(hrs, 1)} hrs${summary ? '. Installed: ' + summary : ''}${photos.length ? `. ${photos.length} photo(s)` : ''}.`);
         notify();
-        confetti();
-        toast(first ? 'Log submitted. Nice work out there!' : 'Log resubmitted');
+        toast(first ? 'Log submitted to the office' : 'Log resubmitted');
         route();
       } else if (act === 'delete') {
         if (await confirmSheet('Delete daily log?', `Remove the ${fmtDate(log.date)} log and its ${photos.length} photo(s)?`)) {
           clearTimeout(saveTimer);
           for (const p of photos) await DB.del('photos', p.id);
+          if (photos.some((p) => p.id === job.lastPhotoId)) { job.lastPhotoId = null; await DB.put('jobs', job); }
           for (const r of reqs.filter((x) => x.logId === log.id)) { r.logId = null; await DB.put('requests', r); }
           await DB.del('logs', log.id);
           notify();
@@ -1772,7 +1773,7 @@
   /* Pick who is using this device – no passwords, just attribution for logs and chat. */
   function profileSheet(firstRun) {
     sheet(firstRun ? 'Welcome to SiltLine' : 'Who’s using this device?', `
-      ${firstRun ? `<div class="welcome-art">${Art.tractor()}</div><p class="muted">Daily logs, BMP quantities, stormwater inspections, rain events and team chat for erosion control crews. Everything is saved on this device — no sign-up.</p>` : ''}
+      ${firstRun ? `<p class="muted">Daily logs, BMP quantities, stormwater inspections, rain events and team chat for erosion control crews. Everything is saved on this device — no sign-up.</p>` : ''}
       ${S.people.length ? `<div class="pick-list">${S.people.map((p) => `
         <button class="pick ${S.me && S.me.id === p.id ? 'on' : ''}" data-pid="${p.id}"><span class="avatar ${roleClass(p.role)}">${esc(initials(p.name))}</span>
         <span class="grow"><b>${esc(p.name)}</b><small>${esc(p.role)}</small></span>${S.me && S.me.id === p.id ? ICON.check : ''}</button>`).join('')}</div>

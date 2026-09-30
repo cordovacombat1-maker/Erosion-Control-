@@ -4,12 +4,12 @@ A mobile-first web app for erosion control contractors. Foremen log each day's w
 
 ## Features
 
-- **Illustrated, field-friendly design**: animated jobsite scenes (tractor bush-hogging a field, crew driving silt fence stakes, a stormwater pond in the rain), a silt-fence header stripe, rugged condensed type, big touch targets, a center **+** button for anything you need to log, and confetti when a daily log is submitted.
+- **Your own jobsite photos up front**: the home banner, job cards and job pages show each job's cover photo or the latest site photo from its daily logs. Jobs without photos get a topographic contour background. Big touch targets, and a center **+** button for anything you need to log.
 - **Home dashboard**:
   - one-tap "Start today's log"
   - alerts for inspections due, overdue requests and unsubmitted logs
   - quick tiles for daily log, rain gauge, requests and crew chat
-  - "This month in the dirt" stats with fun conversions (silt fence in football fields, runoff gallons per acre)
+  - month-to-date production: silt fence, wattles, inlet protection, mowing acres, rainfall, crew hours
 - **Stormwater management** (per-job tab):
   - rain gauge log with a 30-day rainfall chart
   - automatic post-rain inspection trigger (default 0.5") and routine inspection interval (default 7 days), both adjustable to match your permit
@@ -57,7 +57,7 @@ Data lives only in the browser on each device. The team shares information by ex
 index.html            app shell
 css/styles.css        styles (earth-tone palette, dark mode)
 js/db.js              IndexedDB storage, export/import
-js/art.js             illustrated SVG jobsite scenes (animated with CSS)
+js/art.js             topographic contour backgrounds (fallback when a job has no photos)
 js/catalog.js         default BMP catalog, roles, conditions
 js/ui.js              helpers (sheets, toasts, image compression, downloads)
 js/pdf.js             daily report + quantity summary PDFs

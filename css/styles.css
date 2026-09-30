@@ -499,54 +499,23 @@ body[data-view="chatView"] .app { padding-bottom: 16px; }
    v2 — illustrated, playful field UI
    ===================================================================== */
 
-/* ---------- Scene art & animation ---------- */
+/* ---------- Photo banners ---------- */
 .art { display: block; width: 100%; height: 100%; }
-.art .wheel { animation: spin 1.6s linear infinite; }
-.art .bounce { animation: bounce .45s ease-in-out infinite alternate; }
-.art .puffs circle { animation: puff 2.4s ease-out infinite; transform-box: fill-box; transform-origin: center; }
-.art .puffs circle:nth-child(2) { animation-delay: .8s; }
-.art .puffs circle:nth-child(3) { animation-delay: 1.6s; }
-.art .clippings rect { animation: clip 1.2s ease-out infinite; }
-.art .clippings rect:nth-child(2n) { animation-delay: .4s; }
-.art .clippings rect:nth-child(3n) { animation-delay: .8s; }
-.art .sway { animation: sway 2.8s ease-in-out infinite alternate; transform-box: fill-box; transform-origin: bottom; }
-.art .drift { animation: drift 18s ease-in-out infinite alternate; }
-.art .swing { animation: swing .9s cubic-bezier(.5,0,.3,1) infinite; }
-.art .rain { animation: rain .7s linear infinite; }
-.art .ripple ellipse { animation: ripple 2.2s ease-out infinite; transform-box: fill-box; transform-origin: center; }
-.art .ripple ellipse:nth-child(2) { animation-delay: .7s; }
-.art .ripple ellipse:nth-child(3) { animation-delay: 1.4s; }
-.art .flow path { animation: flow 1s linear infinite; }
-.art .bob { animation: bob 2s ease-in-out infinite alternate; }
-@keyframes spin { to { transform: rotate(360deg); } }
-@keyframes bounce { to { transform: translateY(-1.2px); } }
-@keyframes puff { 0% { opacity: .9; transform: translateY(0) scale(.6); } 100% { opacity: 0; transform: translateY(-14px) scale(1.4); } }
-@keyframes clip { 0% { opacity: 0; transform: translate(0, 0); } 30% { opacity: 1; } 100% { opacity: 0; transform: translate(-16px, -10px); } }
-@keyframes sway { from { transform: skewX(-4deg); } to { transform: skewX(5deg); } }
-@keyframes drift { to { transform: translateX(24px); } }
-@keyframes swing { 0%, 100% { transform: rotate(-38deg); } 45% { transform: rotate(18deg); } 55% { transform: rotate(16deg); } }
-@keyframes rain { from { transform: translateY(-40px); } to { transform: translateY(40px); } }
-@keyframes ripple { 0% { opacity: 1; transform: scale(.4); } 100% { opacity: 0; transform: scale(1.6); } }
-@keyframes flow { to { stroke-dashoffset: -18; } }
-@keyframes bob { to { transform: translateY(1.5px); } }
-.job-thumb .art *, .pick-thumb .art *, .storm-art .art * { animation-play-state: paused; }
-
-/* ---------- Home hero ---------- */
-.scene-hero {
-  position: relative; height: 212px; border-radius: 22px; overflow: hidden; margin-bottom: 14px;
-  box-shadow: 0 10px 30px rgba(31, 59, 45, .18); isolation: isolate;
-}
-.scene-stage, .scene { position: absolute; inset: 0; }
-.scene { opacity: 0; transition: opacity 1s ease; }
-.scene.on { opacity: 1; }
-.scene-shade { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(10, 22, 14, .62) 0%, rgba(10, 22, 14, .18) 55%, transparent 80%); }
-.scene-overlay { position: absolute; left: 18px; right: 18px; top: 16px; color: #fff; text-shadow: 0 1px 8px rgba(0,0,0,.35); }
-.scene-overlay h1 { font-size: 32px; line-height: 1.05; margin: 2px 0 4px; }
-.eyebrow.light { color: #ffd98a; }
-.tagline { margin: 0; font-weight: 600; font-size: 15px; opacity: .95; }
-.scene-dots { position: absolute; right: 14px; bottom: 12px; display: flex; gap: 6px; }
-.scene-dots button { width: 8px; height: 8px; border-radius: 4px; border: 0; padding: 0; background: rgba(255,255,255,.55); cursor: pointer; transition: width .25s; }
-.scene-dots button.on { width: 22px; background: #fff; }
+svg.art { stroke: none; stroke-width: 1; }
+.cover-img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.photo-hero { position: relative; height: 200px; border-radius: 18px; overflow: hidden; margin-bottom: 14px; box-shadow: var(--shadow); isolation: isolate; }
+.photo-hero > .art, .photo-hero > .cover-img { position: absolute; inset: 0; }
+.photo-shade { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(10, 20, 14, .55), rgba(10, 20, 14, .1) 70%); }
+.photo-hero.has-photo .photo-shade { background: linear-gradient(0deg, rgba(8, 16, 11, .82) 0%, rgba(8, 16, 11, .35) 55%, rgba(8, 16, 11, .15)); }
+.photo-overlay { position: absolute; left: 18px; right: 18px; bottom: 16px; color: #fff; }
+.photo-hero:not(.has-photo) .photo-overlay { top: 22px; bottom: auto; }
+.photo-overlay h1 { font-size: 30px; line-height: 1.05; margin: 2px 0 4px; }
+.eyebrow.light { color: #f0c46a; }
+.hero-sub { margin: 0; font-weight: 600; opacity: .9; }
+.photo-cap { position: absolute; top: 12px; right: 12px; display: inline-flex; align-items: center; gap: 5px; max-width: 70%; font-size: 11.5px; font-weight: 600; color: #fff; background: rgba(0, 0, 0, .45); padding: 4px 9px; border-radius: 999px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; backdrop-filter: blur(4px); }
+.photo-cap svg { width: 13px; height: 13px; flex: none; }
+.cover-btn { position: absolute; right: 10px; top: 10px; display: inline-flex; align-items: center; gap: 6px; border: 0; cursor: pointer; font-size: 12px; font-weight: 700; color: #fff; background: rgba(0, 0, 0, .45); padding: 6px 10px; border-radius: 999px; backdrop-filter: blur(4px); }
+.cover-btn svg { width: 14px; height: 14px; }
 
 .cta {
   width: 100%; display: flex; align-items: center; gap: 14px; padding: 14px 16px; margin-bottom: 12px;
@@ -605,7 +574,7 @@ body[data-view="chatView"] .app { padding-bottom: 16px; }
 
 .job-card { display: flex; padding: 0; border-left: 0; }
 .job-thumb { width: 96px; flex: none; position: relative; }
-.job-thumb .art { position: absolute; inset: 0; }
+.job-thumb .art, .job-thumb .cover-img { position: absolute; inset: 0; }
 .job-body { flex: 1; min-width: 0; padding: 12px 14px; }
 .job-card h3 { font-size: 17px; line-height: 1.2; }
 .job-foot { align-items: center; }
@@ -705,24 +674,16 @@ body[data-view="chatView"] .app { padding-bottom: 16px; }
 .chips-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 
 /* ---------- Misc ---------- */
-.welcome-art { height: 150px; border-radius: 16px; overflow: hidden; margin-bottom: 12px; }
-.empty-scene { width: 100%; max-width: 360px; height: 150px; border-radius: 16px; overflow: hidden; }
-.confetti { position: fixed; inset: 0; pointer-events: none; z-index: 70; overflow: hidden; }
-.confetti i { position: absolute; top: -12px; width: 8px; height: 13px; border-radius: 2px; animation: fall 2s cubic-bezier(.3,.6,.5,1) forwards; }
-@keyframes fall { to { transform: translate(var(--x), 105vh) rotate(var(--r)); opacity: .9; } }
 .fab { display: none; }
 
 @media (max-width: 380px) {
   .quick-grid { gap: 6px; }
   .tile { font-size: 11.5px; }
-  .scene-overlay h1 { font-size: 27px; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .art *, .confetti { animation: none !important; }
+  .photo-overlay h1 { font-size: 26px; }
 }
 
 /* Illustrations and charts draw their own strokes – don't inherit the icon outline style. */
-svg.art, svg.rain-chart { stroke: none; stroke-width: 1; }
+svg.rain-chart { stroke: none; stroke-width: 1; }
 .rain-chart text, .rain-chart .hit, .rain-chart .rbar path { stroke: none; }
 .alerts { grid-template-columns: minmax(0, 1fr); }
 .quick { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
